@@ -62,9 +62,16 @@ A production-grade compiler that translates Lua and JavaScript into statically-t
 ## Quick Start
 
 ```bash
-./fredc/target/release/fredc examples/01_hello_world.fred
-./01_hello_world
+make install
+fred examples/01_hello_world.fred && ./01_hello_world
 # Output: Hello, World!
+```
+
+Or drop into the REPL:
+```bash
+fred
+fred> let x = 42
+fred> print(x)
 ```
 
 ## Usage

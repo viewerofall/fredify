@@ -1,2 +1,0 @@
-Line 1: Fred is awesome
-Line 2: Lua + JS to C!
