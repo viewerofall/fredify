@@ -69,8 +69,19 @@ A production-grade compiler that translates Lua and JavaScript into statically-t
 
 ## Usage
 
+### Compile a file
 ```bash
 fredc <file.fred> [output_name]
+```
+
+### Interactive REPL
+```bash
+fredc
+# Drops into interactive shell
+fred> let x = 5
+fred> print(x)
+5
+fred> exit
 ```
 
 ### Examples
