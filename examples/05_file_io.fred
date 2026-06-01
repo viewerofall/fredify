@@ -1,0 +1,9 @@
+let handle = io.open("example_output.txt", "w")
+io.write(handle, "Line 1: Fred is awesome\n")
+io.write(handle, "Line 2: Lua + JS to C!\n")
+io.close(handle)
+
+let in_handle = io.open("example_output.txt", "r")
+let line = io.read(in_handle)
+print("Read from file:", line)
+io.close(in_handle)

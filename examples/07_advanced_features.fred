@@ -1,0 +1,15 @@
+let nums = [1, 2, 3, 4, 5]
+
+let doubled = nums.map(fn(x) { return x * 2 })
+let sum = doubled.reduce(fn(acc, x) { return acc + x }, 0)
+print("Map + Reduce result:", sum)
+
+let slice = nums.slice(1, 4)
+print("Slice [1:4]:", slice.join(","))
+
+let has_three = nums.includes(3)
+print("Contains 3:", has_three)
+
+let path = os.getenv("HOME")
+let home_len = path.length()
+print("Home path length:", home_len)

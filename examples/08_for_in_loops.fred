@@ -1,0 +1,16 @@
+// Iterate over numeric array with for-in
+let nums = [10, 20, 30, 40]
+let sum = 0
+
+for n in nums {
+    sum = sum + n
+}
+
+print(sum)
+
+// Works great for iteration
+let items = [2, 4, 6, 8, 10]
+
+for item in items {
+    print(item)
+}

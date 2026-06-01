@@ -1,0 +1,10 @@
+let nums = [1, 2, 3, 4, 5]
+
+let doubled = nums.map(fn(x) { return x * 2 })
+print("Doubled:", doubled.join(","))
+
+let evens = nums.filter(fn(x) { return x > 2 })
+print("Greater than 2:", evens.join(","))
+
+let sum = nums.reduce(fn(acc, x) { return acc + x }, 0)
+print("Sum:", sum)

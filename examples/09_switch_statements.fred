@@ -1,0 +1,25 @@
+// Switch with multiple cases
+let status = 200
+
+switch (status) {
+    case 200:
+        print("OK")
+    case 404:
+        print("Not Found")
+    case 500:
+        print("Server Error")
+    default:
+        print("Unknown Status")
+}
+
+// Switch on string-like values
+let color = 3
+
+switch (color) {
+    case 1:
+        print("Red")
+    case 2:
+        print("Green")
+    case 3:
+        print("Blue")
+}

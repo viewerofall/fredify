@@ -1,0 +1,7 @@
+let data = [5, 2, 8, 1, 9, 3]
+table.sort(data)
+print("Sorted:", table.concat(data, ", "))
+
+let arr = [10, 20, 30]
+table.insert(arr, 40)
+print("After insert:", table.concat(arr, "-"))

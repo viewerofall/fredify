@@ -1,0 +1,18 @@
+// String interpolation with backticks
+let name = "World"
+let age = 42
+let score = 98
+
+print(`Hello ${name}!`)
+print(`Name: ${name}, Age: ${age}`)
+print(`Score: ${score}/100`)
+
+// Interpolation with expressions
+let x = 5
+let y = 10
+print(`${x} + ${y} = ${x + y}`)
+
+// Interpolation with method calls on strings
+let greeting = "hello"
+let upper = greeting.uppercase()
+print(`Uppercase: ${upper}`)

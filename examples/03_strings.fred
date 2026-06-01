@@ -1,0 +1,11 @@
+let greeting = "Hello"
+let name = "Fred"
+let message = greeting + ", " + name + "!"
+
+print(message)
+print("Uppercase:", message.uppercase())
+print("Length:", message.length())
+
+let text = "Find the needle"
+let pos = string.find(text, "needle")
+print("Position:", pos)

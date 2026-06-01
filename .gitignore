@@ -1,0 +1,44 @@
+# Build artifacts
+/fredc/target/
+/fredc/Cargo.lock
+*.o
+*.a
+*.so
+*.dylib
+
+# Generated executables (without extension)
+/01_*
+/02_*
+/03_*
+/04_*
+/05_*
+/06_*
+/07_*
+/08_*
+/09_*
+/10_*
+/[a-z_]*_test
+/test_*
+
+# Generated C code
+*.c
+
+# Temporary files
+*.swp
+*.swo
+*~
+.DS_Store
+*.tmp
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# Node (CASTL)
+/castl-js/node_modules/
+/castl-js/package-lock.json
+
+# Output
+/output/
+/build/
