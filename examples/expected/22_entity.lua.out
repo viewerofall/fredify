@@ -1,0 +1,6 @@
+name: abyss
+speed: 3.5
+hp after hit: 70
+abyss is still alive
+magnitude: 10
+world: veil 256x256

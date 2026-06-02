@@ -1,0 +1,5 @@
+owner abyss
+balance 100.5
+after deposit 150
+vector 3 4 magnitude 5
+point 10 20

@@ -1,0 +1,32 @@
+=== 1. Array element assignment ===
+grid: 10, 0, 30, 0, 50
+
+=== 2. Compound assignment ===
+total after += -= *= /=: 65
+grid[1] after += 5: 5
+
+=== 3. String methods ===
+original:  '   Hello, Fred World!   '
+trim():    'Hello, Fred World!'
+replace():    Hello, FRED World!   
+char_at(3): H
+upper:     HELLO, FRED WORLD!
+
+=== 4. os.sleep animation ===
+[#]
+[##]
+[###]
+[####]
+[#####]
+[######]
+[#######]
+[########]
+[#########]
+[##########]
+loading complete!
+
+=== 5. nuke() (.fred-only kill switch) ===
+Uncomment the next line to hard-crash the program:
+// nuke()
+
+Done! (nuke stayed disarmed)

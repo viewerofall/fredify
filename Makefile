@@ -1,8 +1,20 @@
-.PHONY: install build clean check-deps help uninstall
+.PHONY: install build clean check-deps help uninstall test test-run gold
 
 INSTALL_PREFIX ?= $(HOME)/.local/bin
 FREDC_BINARY := fredc/target/release/fredc
 FRED_WRAPPER := $(INSTALL_PREFIX)/fred
+
+# Every example compiles (make test). A deterministic subset also gets run and
+# diffed against golden output (make test-run). Excluded: random, stdin, network.
+ALL_EXAMPLES := $(wildcard examples/*.fred examples/*.js examples/*.lua)
+SKIP_RUN := \
+	examples/04_math_library.fred \
+	examples/11_rock_paper_scissors.fred \
+	examples/12_number_guessing_game.fred \
+	examples/13_snake_game.fred \
+	examples/15_weather_http.fred \
+	examples/17_rock_paper_scissors.js
+RUN_EXAMPLES := $(filter-out $(SKIP_RUN),$(ALL_EXAMPLES))
 
 help:
 	@echo "fredify - Lua+JS→C Compiler"
@@ -10,6 +22,9 @@ help:
 	@echo "Usage:"
 	@echo "  make install      Build and install fred command"
 	@echo "  make build        Build fredc binary only"
+	@echo "  make test         Compile every example (.fred/.js/.lua)"
+	@echo "  make test-run     Run deterministic examples, diff vs golden output"
+	@echo "  make gold         Regenerate golden output (after intended changes)"
 	@echo "  make check-deps   Check system dependencies"
 	@echo "  make clean        Remove build artifacts"
 	@echo "  make uninstall    Remove installed fred command"
@@ -57,7 +72,8 @@ uninstall:
 clean:
 	@echo "Cleaning..."
 	@cd fredc && cargo clean && cd ..
-	@rm -f /tmp/__repl_* /tmp/*.c
+	@rm -f /tmp/__repl_* /tmp/*.c example_output.txt
+	@rm -rf /tmp/fredrun
 	@echo "✓ Cleaned"
 
 test: build
@@ -75,3 +91,44 @@ test: build
 	rm -f /tmp/fredtest_out /tmp/fredtest_out.c; \
 	if [ $$fail -ne 0 ]; then echo "✗ Some examples failed"; exit 1; fi
 	@echo "✓ All examples compile (.fred, .js, .lua)"
+
+# Run the deterministic examples and diff stdout against examples/expected/*.out.
+test-run: build
+	@echo "Running examples + diffing golden output..."
+	@mkdir -p /tmp/fredrun
+	@fail=0; \
+	for f in $(RUN_EXAMPLES); do \
+		name=$$(basename $$f); \
+		printf '  %-40s ' "$$name"; \
+		if ! $(FREDC_BINARY) "$$f" /tmp/fredrun/bin > /dev/null 2>&1; then \
+			echo "COMPILE FAIL"; fail=1; continue; \
+		fi; \
+		/tmp/fredrun/bin > /tmp/fredrun/got 2>&1; \
+		if [ ! -f "examples/expected/$$name.out" ]; then \
+			echo "NO GOLDEN (run: make gold)"; fail=1; continue; \
+		fi; \
+		if diff -u "examples/expected/$$name.out" /tmp/fredrun/got > /tmp/fredrun/d 2>&1; then \
+			echo "ok"; \
+		else \
+			echo "MISMATCH"; fail=1; sed 's/^/      /' /tmp/fredrun/d; \
+		fi; \
+	done; \
+	rm -rf /tmp/fredrun example_output.txt; \
+	if [ $$fail -ne 0 ]; then echo "✗ test-run failures"; exit 1; fi
+	@echo "✓ All runnable examples match golden output"
+
+# Regenerate golden output. Run this when output legitimately changes, then
+# eyeball `git diff examples/expected/` before committing.
+gold: build
+	@mkdir -p examples/expected /tmp/fredrun
+	@for f in $(RUN_EXAMPLES); do \
+		name=$$(basename $$f); \
+		if $(FREDC_BINARY) "$$f" /tmp/fredrun/bin > /dev/null 2>&1; then \
+			/tmp/fredrun/bin > "examples/expected/$$name.out" 2>&1; \
+			echo "  gold $$name"; \
+		else \
+			echo "  SKIP $$name (compile failed)"; \
+		fi; \
+	done; \
+	rm -rf /tmp/fredrun example_output.txt
+	@echo "✓ Regenerated golden outputs in examples/expected/"

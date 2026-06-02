@@ -42,3 +42,6 @@
 # Output
 /output/
 /build/
+
+# Example runtime artifact (05_file_io writes this in cwd)
+/example_output.txt

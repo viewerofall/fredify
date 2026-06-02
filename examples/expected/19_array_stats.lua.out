@@ -1,0 +1,6 @@
+count   = 7
+sum     = 75
+max     = 23
+# nums  = 7
+average = 10
+sorted, joined: 1, 5, 7, 9, 12, 18, 23
