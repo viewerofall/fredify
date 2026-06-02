@@ -276,30 +276,50 @@ impl Lexer {
             }
             Some(c) if c.is_numeric() => {
                 let (num, is_float) = self.read_number();
-                Ok(if is_float { Token::Float(num) } else { Token::Number(num) })
+                Ok(if is_float {
+                    Token::Float(num)
+                } else {
+                    Token::Number(num)
+                })
             }
             Some('"') => self.read_string('"').map(Token::String),
             Some('\'') => self.read_string('\'').map(Token::String),
             Some('`') => self.read_template_string(),
             Some('+') => {
                 self.advance();
-                if self.peek() == Some('=') { self.advance(); Ok(Token::PlusEqual) }
-                else { Ok(Token::Plus) }
+                if self.peek() == Some('=') {
+                    self.advance();
+                    Ok(Token::PlusEqual)
+                } else {
+                    Ok(Token::Plus)
+                }
             }
             Some('-') => {
                 self.advance();
-                if self.peek() == Some('=') { self.advance(); Ok(Token::MinusEqual) }
-                else { Ok(Token::Minus) }
+                if self.peek() == Some('=') {
+                    self.advance();
+                    Ok(Token::MinusEqual)
+                } else {
+                    Ok(Token::Minus)
+                }
             }
             Some('*') => {
                 self.advance();
-                if self.peek() == Some('=') { self.advance(); Ok(Token::StarEqual) }
-                else { Ok(Token::Star) }
+                if self.peek() == Some('=') {
+                    self.advance();
+                    Ok(Token::StarEqual)
+                } else {
+                    Ok(Token::Star)
+                }
             }
             Some('/') => {
                 self.advance();
-                if self.peek() == Some('=') { self.advance(); Ok(Token::SlashEqual) }
-                else { Ok(Token::Slash) }
+                if self.peek() == Some('=') {
+                    self.advance();
+                    Ok(Token::SlashEqual)
+                } else {
+                    Ok(Token::Slash)
+                }
             }
             Some('%') => {
                 self.advance();
@@ -413,4 +433,64 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
     }
 
     Ok(tokens)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tokenizes_let_binding() {
+        let toks = tokenize("let x = 42").unwrap();
+        assert_eq!(
+            toks,
+            vec![
+                Token::Let,
+                Token::Id("x".into()),
+                Token::Equal,
+                Token::Number(42.0),
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn distinguishes_int_and_float() {
+        assert_eq!(tokenize("3").unwrap()[0], Token::Number(3.0));
+        assert_eq!(tokenize("3.5").unwrap()[0], Token::Float(3.5));
+    }
+
+    #[test]
+    fn keywords_are_not_identifiers() {
+        let toks = tokenize("fn while return").unwrap();
+        assert_eq!(toks[0], Token::Fn);
+        assert_eq!(toks[1], Token::While);
+        assert_eq!(toks[2], Token::Return);
+    }
+
+    #[test]
+    fn multi_char_operators() {
+        let toks = tokenize("== != <= >= +=").unwrap();
+        assert_eq!(
+            &toks[..5],
+            &[
+                Token::EqualEqual,
+                Token::NotEqual,
+                Token::LessEqual,
+                Token::GreaterEqual,
+                Token::PlusEqual,
+            ]
+        );
+    }
+
+    #[test]
+    fn string_literal_keeps_contents() {
+        let toks = tokenize("\"hello\"").unwrap();
+        assert_eq!(toks[0], Token::String("hello".into()));
+    }
+
+    #[test]
+    fn unterminated_string_is_error() {
+        assert!(tokenize("\"oops").is_err());
+    }
 }

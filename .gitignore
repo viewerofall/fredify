@@ -1,6 +1,6 @@
 # Build artifacts
 /fredc/target/
-/fredc/Cargo.lock
+# Cargo.lock is committed (fredc is a binary → reproducible builds).
 *.o
 *.a
 *.so

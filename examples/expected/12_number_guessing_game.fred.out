@@ -1,0 +1,28 @@
+=== NUMBER GUESSING GAME ===
+I'm thinking of a number between 1 and 100.
+You have 7 tries. Good luck!
+
+Try 1/7 - enter your guess: 
+Too low! Aim higher.
+
+Try 2/7 - enter your guess: 
+Too low! Aim higher.
+
+Try 3/7 - enter your guess: 
+Too low! Aim higher.
+
+Try 4/7 - enter your guess: 
+Too low! Aim higher.
+
+Try 5/7 - enter your guess: 
+Too low! Aim higher.
+
+Try 6/7 - enter your guess: 
+Too low! Aim higher.
+
+Try 7/7 - enter your guess: 
+Too low! Aim higher.
+
+
+Out of tries! The number was 84.
+Thanks for playing!

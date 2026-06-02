@@ -1,414 +1,262 @@
-mod lexer;
-mod parser;
 mod ast;
 mod codegen;
-mod validator;
 mod js;
+mod lexer;
 mod lua;
+mod parser;
+mod validator;
 
-use std::env;
+use anyhow::{bail, Context, Result};
+use clap::Parser;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::io::{self, Write};
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        run_repl();
-        return;
-    }
-
-    // Check for help flags
-    if args.len() == 2 && (args[1] == "--help" || args[1] == "-h" || args[1] == "help") {
-        print_help();
-        return;
-    }
-
-    let mut input_path = "";
-    let mut output_dir = None;
-    let mut output_name = None;
-    let mut stop_at = "exe"; // "lua", "fred", "c", or "exe"
-
-    // Parse args
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--to-lua" => stop_at = "lua",
-            "--to-fred" => stop_at = "fred",
-            "--to-c" => stop_at = "c",
-            "-o" | "--output" => {
-                if i + 1 < args.len() {
-                    output_dir = Some(args[i + 1].clone());
-                    i += 2;
-                } else {
-                    eprintln!("Error: -o requires a directory\n");
-                    print_help();
-                    std::process::exit(1);
-                }
-                continue;
-            }
-            _ if !args[i].starts_with('-') => {
-                if input_path.is_empty() {
-                    input_path = &args[i];
-                    // Only set output_name from next arg if no -o was given
-                    if output_dir.is_none() && i + 1 < args.len() && !args[i + 1].starts_with('-') {
-                        output_name = Some(args[i + 1].clone());
-                        i += 2;
-                        continue;
-                    }
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-
-    if input_path.is_empty() {
-        eprintln!("Error: No input file or directory specified\n");
-        print_help();
-        std::process::exit(1);
-    }
-
-    // Check if input is a directory
-    if let Ok(metadata) = fs::metadata(input_path) {
-        if metadata.is_dir() {
-            compile_directory(input_path, output_dir.as_deref(), stop_at);
-            return;
-        }
-    }
-
-    // Single file compilation
-    let output_name = output_name.unwrap_or_else(|| {
-        Path::new(input_path)
-            .file_stem()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string()
-    });
-
-    // Read file
-    let raw = match fs::read_to_string(input_path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Error reading {}: {}", input_path, e);
-            std::process::exit(1);
-        }
-    };
-
-    // JavaScript and Lua inputs are transpiled to .fred source first (no node).
-    let transpiled = input_path.ends_with(".js") || input_path.ends_with(".lua");
-    let source = match to_fred_source(input_path, raw) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("{}", e);
-            std::process::exit(1);
-        }
-    };
-
-    // --to-fred on a .js/.lua file shows the transpiled .fred source.
-    if stop_at == "fred" && transpiled {
-        let fred_file = format!("{}.fred", output_name);
-        if let Err(e) = fs::write(&fred_file, &source) {
-            eprintln!("Error writing .fred file: {}", e);
-            std::process::exit(1);
-        }
-        println!("✓ Generated: {}", fred_file);
-        return;
-    }
-
-    // Tokenize
-    let tokens = match lexer::tokenize(&source) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("Lexer error: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    // Parse
-    let ast = match parser::parse(tokens) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("Parse error: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    // Early exit: output AST as .fred
-    if stop_at == "fred" {
-        let fred_file = format!("{}.fred", output_name);
-        if let Err(e) = fs::write(&fred_file, format!("{:#?}", ast)) {
-            eprintln!("Error writing .fred file: {}", e);
-            std::process::exit(1);
-        }
-        println!("✓ Generated: {}", fred_file);
-        return;
-    }
-
-    // Validate
-    let mut validator = validator::Validator::new();
-    validator.set_allow_nuke(input_path.ends_with(".fred"));
-    if let Err(errors) = validator.validate(&ast) {
-        eprintln!("Validation errors:");
-        for err in errors {
-            eprintln!("  ✗ {}", err);
-        }
-        std::process::exit(1);
-    }
-
-    // Generate C code
-    let c_code = codegen::generate_c(&ast);
-
-    // Early exit: output C code
-    if stop_at == "c" {
-        let c_file = format!("{}.c", output_name);
-        if let Err(e) = fs::write(&c_file, &c_code) {
-            eprintln!("Error writing C file: {}", e);
-            std::process::exit(1);
-        }
-        println!("✓ Generated: {}", c_file);
-        return;
-    }
-
-    // Full compilation: C file in /tmp, then gcc. Use only the file name for
-    // the temp path so an output like `/tmp/foo` doesn't become `/tmp//tmp/foo.c`.
-    let c_stem = Path::new(&output_name)
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| output_name.clone());
-    let c_file = format!("/tmp/{}.c", c_stem);
-    if let Err(e) = fs::write(&c_file, &c_code) {
-        eprintln!("Error writing C file: {}", e);
-        std::process::exit(1);
-    }
-
-    println!("Generated: {}", c_file);
-
-    // Determine output executable path
-    let exe_path = match &output_dir {
-        Some(dir) => format!("{}/{}", dir, output_name),
-        None => output_name.clone(),
-    };
-
-    // Create output directory if needed
-    if let Some(dir) = &output_dir {
-        if let Err(e) = fs::create_dir_all(dir) {
-            eprintln!("Error creating output directory {}: {}", dir, e);
-            std::process::exit(1);
-        }
-    }
-
-    // Compile with gcc
-    let output = Command::new("gcc")
-        .args(&["-o", &exe_path, &c_file, "-lm"])
-        .output();
-
-    match output {
-        Ok(out) => {
-            if out.status.success() {
-                println!("✓ Compiled: {} → {}", input_path, exe_path);
-            } else {
-                eprintln!("GCC compilation failed:");
-                eprintln!("{}", String::from_utf8_lossy(&out.stderr));
-                std::process::exit(1);
-            }
-        }
-        Err(e) => {
-            eprintln!("Error invoking GCC: {}", e);
-            eprintln!("Make sure `gcc` is in your PATH");
-            std::process::exit(1);
-        }
-    }
+/// Where to stop the pipeline. Maps to the --to-fred / --to-c flags.
+#[derive(Clone, Copy, PartialEq)]
+enum Stop {
+    /// Emit the .fred IR (AST), or the transpiled .fred source for .js/.lua.
+    Fred,
+    /// Emit C source only.
+    C,
+    /// Full pipeline: C source compiled to a native executable via gcc.
+    Exe,
 }
 
-fn compile_directory(dir: &str, output_dir: Option<&str>, stop_at: &str) {
+/// Errors from a single file's compilation pipeline. Each stage maps to one
+/// variant so the failing phase is unambiguous (thiserror for the library
+/// layer; main wraps these with anyhow for top-level reporting).
+#[derive(Debug, thiserror::Error)]
+enum CompileError {
+    #[error("error reading {path}: {source}")]
+    Read { path: String, source: io::Error },
+    #[error("error writing {path}: {source}")]
+    Write { path: String, source: io::Error },
+    #[error("{0}")]
+    Transpile(String),
+    #[error("lexer error: {0}")]
+    Lex(String),
+    #[error("parse error: {0}")]
+    Parse(String),
+    #[error("validation failed:\n{}", .0.iter().map(|e| format!("  ✗ {e}")).collect::<Vec<_>>().join("\n"))]
+    Validate(Vec<String>),
+    #[error("gcc compilation failed:\n{0}")]
+    Gcc(String),
+    #[error("could not invoke gcc: {0} (is gcc on your PATH?)")]
+    GccSpawn(io::Error),
+}
+
+const AFTER_HELP: &str = "\
+EXAMPLES:
+  fred examples/01_hello_world.fred        Compile a .fred file to ./01_hello_world
+  fred examples/16_math.js out             JavaScript -> native binary named ./out
+  fred --to-fred mycode.js                 See the .fred a JS file transpiles to
+  fred --to-c source.fred                  Emit C source only (inspect codegen)
+  fred -o ./bin src/                       Batch-compile every src/*.{fred,js,lua}
+  fred                                     Drop into the interactive REPL
+
+PIPELINE:  .fred source -> parser+validator -> AST -> codegen -> C -> gcc -> exe
+INPUTS:    .fred (direct), .lua and .js (transpiled to .fred source first)";
+
+/// .fred compiler — Lua+JS -> C static compiler.
+#[derive(Parser)]
+#[command(name = "fred", version, about, after_help = AFTER_HELP)]
+struct Cli {
+    /// Input .fred/.js/.lua file, or a directory to batch-compile. Omit for REPL.
+    input: Option<String>,
+
+    /// Output executable name (single-file mode only; defaults to the input stem).
+    output: Option<String>,
+
+    /// Output directory (creates it; required form for batch-compiling a directory).
+    #[arg(short = 'o', long = "output")]
+    output_dir: Option<String>,
+
+    /// Stop at the .fred IR (AST), or transpiled .fred source for .js/.lua.
+    #[arg(long = "to-fred", conflicts_with = "to_c")]
+    to_fred: bool,
+
+    /// Stop at generated C source (do not invoke gcc).
+    #[arg(long = "to-c")]
+    to_c: bool,
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    let Some(input) = cli.input.as_deref() else {
+        run_repl();
+        return Ok(());
+    };
+
+    let stop = if cli.to_fred {
+        Stop::Fred
+    } else if cli.to_c {
+        Stop::C
+    } else {
+        Stop::Exe
+    };
+
+    // Directory input → batch compile.
+    if fs::metadata(input).map(|m| m.is_dir()).unwrap_or(false) {
+        return compile_directory(input, cli.output_dir.as_deref(), stop);
+    }
+
+    // Single file. Output base path = [dir/]name (name defaults to input stem).
+    let name = cli.output.clone().unwrap_or_else(|| stem(input));
+    if let Some(dir) = &cli.output_dir {
+        fs::create_dir_all(dir).with_context(|| format!("creating output dir {dir}"))?;
+    }
+    let out_base = match &cli.output_dir {
+        Some(dir) => format!("{dir}/{name}"),
+        None => name,
+    };
+
+    compile_one(input, &out_base, stop).map_err(|e| {
+        // Match the historical exit-with-message behavior, via anyhow.
+        anyhow::anyhow!("{e}")
+    })?;
+    Ok(())
+}
+
+fn compile_directory(dir: &str, output_dir: Option<&str>, stop: Stop) -> Result<()> {
     let output_dir = output_dir.unwrap_or(".");
-
-    // Create output directory if specified
     if output_dir != "." {
-        if let Err(e) = fs::create_dir_all(output_dir) {
-            eprintln!("Error creating output directory {}: {}", output_dir, e);
-            std::process::exit(1);
-        }
+        fs::create_dir_all(output_dir)
+            .with_context(|| format!("creating output dir {output_dir}"))?;
     }
 
-    // Find all .fred, .lua, .js files
-    let mut files = Vec::new();
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(ext) = path.extension() {
-                    let ext_str = ext.to_string_lossy();
-                    if ext_str == "fred" || ext_str == "lua" || ext_str == "js" {
-                        files.push(path);
-                    }
-                }
-            }
-        }
-    }
+    let mut files: Vec<PathBuf> = fs::read_dir(dir)
+        .with_context(|| format!("reading directory {dir}"))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && matches!(
+                    p.extension().and_then(|e| e.to_str()),
+                    Some("fred") | Some("lua") | Some("js")
+                )
+        })
+        .collect();
 
     if files.is_empty() {
-        eprintln!("No .fred, .lua, or .js files found in {}", dir);
-        return;
+        bail!("no .fred, .lua, or .js files found in {dir}");
     }
-
     files.sort();
     println!("Compiling {} files to {}...", files.len(), output_dir);
 
-    let mut success_count = 0;
-    let mut fail_count = 0;
-
-    for file_path in files {
-        let file_str = file_path.to_string_lossy();
-        let file_name = file_path.file_stem().unwrap().to_string_lossy();
-        let output = PathBuf::from(output_dir).join(file_name.as_ref());
-        let output_str = output.to_string_lossy();
-
-        // Compile each file
-        if compile_single_file(&file_str, &output_str, stop_at) {
-            success_count += 1;
-        } else {
-            fail_count += 1;
+    let mut ok = 0usize;
+    for file in &files {
+        let stem = file.file_stem().unwrap().to_string_lossy();
+        let out_base = PathBuf::from(output_dir).join(stem.as_ref());
+        match compile_one(&file.to_string_lossy(), &out_base.to_string_lossy(), stop) {
+            Ok(()) => ok += 1,
+            Err(e) => eprintln!("✗ {}: {e}", file.display()),
         }
     }
 
-    println!("\n✓ Compiled {}/{} files", success_count, success_count + fail_count);
-    if fail_count > 0 {
-        std::process::exit(1);
+    println!("\n✓ Compiled {}/{} files", ok, files.len());
+    if ok != files.len() {
+        bail!("{} file(s) failed", files.len() - ok);
     }
+    Ok(())
+}
+
+fn stem(path: &str) -> String {
+    Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(path)
+        .to_string()
 }
 
 // Read a source file and, for .js/.lua inputs, transpile it to .fred source.
 // .fred files are returned verbatim.
-fn to_fred_source(path: &str, raw: String) -> Result<String, String> {
+fn to_fred_source(path: &str, raw: String) -> Result<String, CompileError> {
     if path.ends_with(".js") {
-        js::transpile(&raw).map_err(|e| format!("JS transpile error in {}: {}", path, e))
+        js::transpile(&raw)
+            .map_err(|e| CompileError::Transpile(format!("JS transpile error in {path}: {e}")))
     } else if path.ends_with(".lua") {
-        lua::transpile(&raw).map_err(|e| format!("Lua transpile error in {}: {}", path, e))
+        lua::transpile(&raw)
+            .map_err(|e| CompileError::Transpile(format!("Lua transpile error in {path}: {e}")))
     } else {
         Ok(raw)
     }
 }
 
-fn compile_single_file(input_file: &str, output_name: &str, stop_at: &str) -> bool {
-    // Read file
-    let raw = match fs::read_to_string(input_file) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("✗ Error reading {}: {}", input_file, e);
-            return false;
-        }
-    };
+fn write_file(path: &str, contents: &str) -> Result<(), CompileError> {
+    fs::write(path, contents).map_err(|source| CompileError::Write {
+        path: path.to_string(),
+        source,
+    })
+}
 
-    // .js/.lua are transpiled to .fred source first.
-    let transpiled = input_file.ends_with(".js") || input_file.ends_with(".lua");
-    let source = match to_fred_source(input_file, raw) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("✗ {}", e);
-            return false;
-        }
-    };
+/// Run one source file through the pipeline, writing output relative to
+/// `out_base` (a path stem with no extension). `out_base` itself is the
+/// executable path in full-compile mode.
+fn compile_one(input: &str, out_base: &str, stop: Stop) -> Result<(), CompileError> {
+    let raw = fs::read_to_string(input).map_err(|source| CompileError::Read {
+        path: input.to_string(),
+        source,
+    })?;
+
+    let transpiled = input.ends_with(".js") || input.ends_with(".lua");
+    let source = to_fred_source(input, raw)?;
 
     // --to-fred on a .js/.lua file shows the transpiled .fred source.
-    if stop_at == "fred" && transpiled {
-        let fred_file = format!("{}.fred", output_name);
-        if let Err(e) = fs::write(&fred_file, &source) {
-            eprintln!("✗ Error writing .fred file: {}", e);
-            return false;
-        }
-        println!("  ✓ {}", fred_file);
-        return true;
+    if stop == Stop::Fred && transpiled {
+        let path = format!("{out_base}.fred");
+        write_file(&path, &source)?;
+        println!("✓ Generated: {path}");
+        return Ok(());
     }
 
-    // Tokenize
-    let tokens = match lexer::tokenize(&source) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("✗ Lexer error in {}: {}", input_file, e);
-            return false;
-        }
-    };
+    let tokens = lexer::tokenize(&source).map_err(CompileError::Lex)?;
+    let ast = parser::parse(tokens).map_err(CompileError::Parse)?;
 
-    // Parse
-    let ast = match parser::parse(tokens) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("✗ Parse error in {}: {}", input_file, e);
-            return false;
-        }
-    };
-
-    // Early exit: output AST as .fred
-    if stop_at == "fred" {
-        let fred_file = format!("{}.fred", output_name);
-        if let Err(e) = fs::write(&fred_file, format!("{:#?}", ast)) {
-            eprintln!("✗ Error writing .fred file: {}", e);
-            return false;
-        }
-        println!("  ✓ {}", fred_file);
-        return true;
+    // --to-fred on a .fred file emits the AST (the .fred IR).
+    if stop == Stop::Fred {
+        let path = format!("{out_base}.fred");
+        write_file(&path, &format!("{ast:#?}"))?;
+        println!("✓ Generated: {path}");
+        return Ok(());
     }
 
-    // Validate
     let mut validator = validator::Validator::new();
-    validator.set_allow_nuke(input_file.ends_with(".fred"));
-    if let Err(errors) = validator.validate(&ast) {
-        eprintln!("✗ Validation errors in {}:", input_file);
-        for err in errors {
-            eprintln!("    {}", err);
-        }
-        return false;
-    }
+    validator.set_allow_nuke(input.ends_with(".fred"));
+    validator.validate(&ast).map_err(CompileError::Validate)?;
 
-    // Generate C code
     let c_code = codegen::generate_c(&ast);
 
-    // Early exit: output C code
-    if stop_at == "c" {
-        let c_file = format!("{}.c", output_name);
-        if let Err(e) = fs::write(&c_file, &c_code) {
-            eprintln!("✗ Error writing C file: {}", e);
-            return false;
-        }
-        println!("  ✓ {}", c_file);
-        return true;
+    if stop == Stop::C {
+        let path = format!("{out_base}.c");
+        write_file(&path, &c_code)?;
+        println!("✓ Generated: {path}");
+        return Ok(());
     }
 
-    // Full compilation: C file in /tmp, then gcc
-    let c_file = format!("/tmp/{}.c", Path::new(output_name).file_name().unwrap().to_string_lossy());
-    if let Err(e) = fs::write(&c_file, &c_code) {
-        eprintln!("✗ Error writing C file: {}", e);
-        return false;
-    }
+    // Full compilation: stage C in /tmp (keyed by the output's file name so a
+    // path like /tmp/foo doesn't become /tmp//tmp/foo.c), then gcc.
+    let c_stem = Path::new(out_base)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| out_base.to_string());
+    let c_file = format!("/tmp/{c_stem}.c");
+    write_file(&c_file, &c_code)?;
 
-    // Compile with gcc
     let output = Command::new("gcc")
-        .args(&["-o", output_name, &c_file, "-lm"])
-        .output();
+        .args(["-o", out_base, &c_file, "-lm"])
+        .output()
+        .map_err(CompileError::GccSpawn)?;
 
-    match output {
-        Ok(out) => {
-            if out.status.success() {
-                println!("  ✓ {}", output_name);
-                true
-            } else {
-                eprintln!("✗ GCC failed for {}:", input_file);
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                for line in stderr.lines().filter(|l| l.contains("error:")) {
-                    eprintln!("    {}", line);
-                }
-                false
-            }
-        }
-        Err(e) => {
-            eprintln!("✗ Error invoking GCC: {}", e);
-            false
-        }
+    if !output.status.success() {
+        return Err(CompileError::Gcc(
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        ));
     }
+    println!("✓ Compiled: {input} → {out_base}");
+    Ok(())
 }
 
 #[derive(PartialEq)]
@@ -432,12 +280,12 @@ fn run_repl() {
     };
 
     let mut mode = ReplMode::Fred;
-    let mut fred_src = String::new();   // accumulated .fred session source
-    let mut c_body = String::new();     // accumulated raw-C statements (main body)
-    let mut c_hdr = String::new();      // accumulated raw-C #include / top-level lines
-    let mut prev_fred = String::new();  // last full stdout (fred mode) for delta printing
-    let mut prev_c = String::new();     // last full stdout (raw-C mode)
-    let mut buffer = String::new();     // multi-line statement accumulator
+    let mut fred_src = String::new(); // accumulated .fred session source
+    let mut c_body = String::new(); // accumulated raw-C statements (main body)
+    let mut c_hdr = String::new(); // accumulated raw-C #include / top-level lines
+    let mut prev_fred = String::new(); // last full stdout (fred mode) for delta printing
+    let mut prev_c = String::new(); // last full stdout (raw-C mode)
+    let mut buffer = String::new(); // multi-line statement accumulator
     let mut counter = 0;
 
     loop {
@@ -651,7 +499,7 @@ fn compile_and_run(c_code: &str, counter: usize) -> Option<String> {
 
     let result = (|| {
         let output = Command::new("gcc")
-            .args(&["-o", &bin_file, &c_file, "-lm"])
+            .args(["-o", &bin_file, &c_file, "-lm"])
             .output();
         match output {
             Ok(out) => {
@@ -722,60 +570,3 @@ fn is_incomplete(code: &str) -> bool {
 
     open_braces > 0 || code.trim().ends_with(',')
 }
-
-fn print_help() {
-    println!("🔥 .fred Compiler — Lua+JS→C static compiler\n");
-    println!("USAGE:");
-    println!("  fred                              Drop into interactive REPL");
-    println!("  fred <file.fred|file.lua|file.js> [output]  Compile to executable");
-    println!("  fred -o <dir> <input_dir>        Batch compile directory");
-    println!("  fred --to-fred <file.js>          Show the .fred a JS file transpiles to");
-    println!("  fred --to-fred <file>             Output .fred IR (AST) for .fred/.lua");
-    println!("  fred --to-c <file>                Output C code only\n");
-
-    println!("EXAMPLES:");
-    println!("  fred examples/01_hello_world.fred");
-    println!("  fred examples/16_math.js out      # JavaScript → native binary");
-    println!("  fred --to-fred mycode.js out      # see the transpiled .fred");
-    println!("  fred --to-c source.fred output.c");
-    println!("  fred mycode.js myapp");
-    println!("  fred -o ./bin src/                Compile all src/ → ./bin/");
-    println!("  fred                              # REPL mode\n");
-
-    println!("COMPILATION PIPELINE:");
-    println!("  .fred source");
-    println!("      ↓ parser + validator");
-    println!("  Abstract Syntax Tree");
-    println!("      ↓ codegen");
-    println!("  C code");
-    println!("      ↓ gcc");
-    println!("  executable\n");
-
-    println!("FLAGS:");
-    println!("  -o, --output <dir>  Output directory for batch compilation");
-    println!("  --to-lua            Stop after JS→Lua transpile (CASTL)");
-    println!("  --to-fred           Stop at AST (for debugging/inspection)");
-    println!("  --to-c              Stop at C code (inspect generated code)");
-    println!("  --help, -h          Show this help\n");
-
-    println!("SUPPORTED INPUTS:");
-    println!("  .fred files   Direct compilation (recommended)");
-    println!("  .lua files    Parsed as .fred syntax");
-    println!("  .js files     Transpiled to .lua via CASTL, then compiled\n");
-
-    println!("FEATURES:");
-    println!("  • Static typing with inference");
-    println!("  • for-in loops, switch/case statements");
-    println!("  • String interpolation with backticks and ${{expr}}");
-    println!("  • Arrays, closures, type-safe operations");
-    println!("  • Standard libraries: Math, OS, IO, Table, type conversion\n");
-
-    println!("REPL COMMANDS (in interactive mode):");
-    println!("  let x = 42                Statement execution");
-    println!("  print(x)                  Variable inspection");
-    println!("  clear                     Clear screen");
-    println!("  exit, quit                Exit REPL\n");
-
-    println!("Learn more: check FREDLANG.md in the project root");
-}
-

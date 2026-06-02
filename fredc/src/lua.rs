@@ -55,11 +55,11 @@ enum Tok {
     Slash,
     DSlash, // //
     Percent,
-    Caret,  // ^
-    Hash,   // #
-    Eq,     // =
-    EqEq,   // ==
-    Ne,     // ~=
+    Caret, // ^
+    Hash,  // #
+    Eq,    // =
+    EqEq,  // ==
+    Ne,    // ~=
     Lt,
     Le,
     Gt,
@@ -85,7 +85,10 @@ struct Lexer {
 
 impl Lexer {
     fn new(src: &str) -> Self {
-        Lexer { s: src.chars().collect(), i: 0 }
+        Lexer {
+            s: src.chars().collect(),
+            i: 0,
+        }
     }
     fn peek(&self) -> Option<char> {
         self.s.get(self.i).copied()
@@ -849,18 +852,37 @@ impl Parser {
             let mut fields = Vec::new();
             while self.peek() != &Tok::RBrace {
                 let key = match self.peek().clone() {
-                    Tok::Name(k) => { self.bump(); k }
+                    Tok::Name(k) => {
+                        self.bump();
+                        k
+                    }
                     Tok::LBracket => {
                         self.bump();
                         let k = match self.peek().clone() {
-                            Tok::Str(s) => { self.bump(); s }
-                            Tok::Num(n) => { self.bump(); emit_num(n) }
-                            other => return Err(format!("table key must be a string/number literal, got {:?}", other)),
+                            Tok::Str(s) => {
+                                self.bump();
+                                s
+                            }
+                            Tok::Num(n) => {
+                                self.bump();
+                                emit_num(n)
+                            }
+                            other => {
+                                return Err(format!(
+                                    "table key must be a string/number literal, got {:?}",
+                                    other
+                                ))
+                            }
                         };
                         self.eat(&Tok::RBracket)?;
                         k
                     }
-                    other => return Err(format!("mixed array/dict tables are unsupported; got {:?}", other)),
+                    other => {
+                        return Err(format!(
+                            "mixed array/dict tables are unsupported; got {:?}",
+                            other
+                        ))
+                    }
                 };
                 self.eat(&Tok::Eq)?;
                 let val = self.expr()?;
@@ -925,14 +947,24 @@ fn map_method(name: &str) -> &str {
     }
 }
 
-fn emit_block(stmts: &[Stmt], level: usize, decl: &mut HashSet<String>, out: &mut String) -> Result<(), String> {
+fn emit_block(
+    stmts: &[Stmt],
+    level: usize,
+    decl: &mut HashSet<String>,
+    out: &mut String,
+) -> Result<(), String> {
     for s in stmts {
         emit_stmt(s, level, decl, out)?;
     }
     Ok(())
 }
 
-fn emit_stmt(s: &Stmt, level: usize, decl: &mut HashSet<String>, out: &mut String) -> Result<(), String> {
+fn emit_stmt(
+    s: &Stmt,
+    level: usize,
+    decl: &mut HashSet<String>,
+    out: &mut String,
+) -> Result<(), String> {
     let pad = indent(level);
     match s {
         Stmt::Local(name, value) => {
@@ -962,7 +994,12 @@ fn emit_stmt(s: &Stmt, level: usize, decl: &mut HashSet<String>, out: &mut Strin
                     return Ok(());
                 }
             }
-            out.push_str(&format!("{}{} = {}\n", pad, emit_expr(target)?, emit_expr(value)?));
+            out.push_str(&format!(
+                "{}{} = {}\n",
+                pad,
+                emit_expr(target)?,
+                emit_expr(value)?
+            ));
         }
         Stmt::Call(e) => out.push_str(&format!("{}{}\n", pad, emit_expr(e)?)),
         Stmt::If(arms, else_body) => emit_if(arms, else_body, level, decl, out)?,
@@ -979,7 +1016,11 @@ fn emit_stmt(s: &Stmt, level: usize, decl: &mut HashSet<String>, out: &mut Strin
             };
             out.push_str(&format!(
                 "{}loop {} from {} to {}{} {{\n",
-                pad, var, emit_expr(start)?, emit_expr(end)?, step_s
+                pad,
+                var,
+                emit_expr(start)?,
+                emit_expr(end)?,
+                step_s
             ));
             emit_block(body, level + 1, decl, out)?;
             out.push_str(&format!("{}}}\n", pad));
@@ -994,7 +1035,11 @@ fn emit_stmt(s: &Stmt, level: usize, decl: &mut HashSet<String>, out: &mut Strin
             // repeat B until C  ->  while (true) { B if (C) { break } }
             out.push_str(&format!("{}while (true) {{\n", pad));
             emit_block(body, level + 1, decl, out)?;
-            out.push_str(&format!("{}if ({}) {{ break }}\n", indent(level + 1), emit_expr(cond)?));
+            out.push_str(&format!(
+                "{}if ({}) {{ break }}\n",
+                indent(level + 1),
+                emit_expr(cond)?
+            ));
             out.push_str(&format!("{}}}\n", pad));
         }
         Stmt::Return(v) => match v {
@@ -1120,15 +1165,18 @@ fn emit_call(callee: &Expr, args: &[Expr]) -> Result<String, String> {
         if let Expr::Name(o) = obj.as_ref() {
             match o.as_str() {
                 "math" => return Ok(format!("{}({})", map_math(name), emit_args(args)?)),
-                "table" | "os" => {
-                    return Ok(format!("{}.{}({})", o, name, emit_args(args)?))
-                }
+                "table" | "os" => return Ok(format!("{}.{}({})", o, name, emit_args(args)?)),
                 "string" => return emit_string_lib(name, args),
                 _ => {}
             }
         }
         // value.method(args) called with dot -> fred method call
-        return Ok(format!("{}.{}({})", emit_expr(obj)?, map_method(name), emit_args(args)?));
+        return Ok(format!(
+            "{}.{}({})",
+            emit_expr(obj)?,
+            map_method(name),
+            emit_args(args)?
+        ));
     }
 
     if let Expr::Name(name) = callee {
@@ -1151,7 +1199,11 @@ fn emit_string_lib(name: &str, args: &[Expr]) -> Result<String, String> {
         }
         "sub" if args.len() >= 2 => {
             let rest: Result<Vec<_>, _> = args[1..].iter().map(emit_expr).collect();
-            Ok(format!("{}.substring({})", emit_expr(&args[0])?, rest?.join(", ")))
+            Ok(format!(
+                "{}.substring({})",
+                emit_expr(&args[0])?,
+                rest?.join(", ")
+            ))
         }
         "find" | "split" => Ok(format!("string.{}({})", name, emit_args(args)?)),
         other => Err(format!(

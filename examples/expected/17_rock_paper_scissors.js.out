@@ -1,0 +1,8 @@
+Rock/Paper/Scissors — press r, p, s to play, q to quit.
+You: Rock   CPU: Rock
+Tie!
+You: Paper   CPU: Paper
+Tie!
+You: Scissors   CPU: Scissors
+Tie!
+You won 0 of 3 rounds. Bye!

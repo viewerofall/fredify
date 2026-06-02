@@ -48,8 +48,8 @@ enum Tok {
     MinusEq,
     StarEq,
     SlashEq,
-    EqEq,   // == or ===
-    NotEq,  // != or !==
+    EqEq,  // == or ===
+    NotEq, // != or !==
     Lt,
     Le,
     Gt,
@@ -87,7 +87,10 @@ struct JsLexer {
 
 impl JsLexer {
     fn new(s: &str) -> Self {
-        JsLexer { src: s.chars().collect(), pos: 0 }
+        JsLexer {
+            src: s.chars().collect(),
+            pos: 0,
+        }
     }
     fn peek(&self) -> Option<char> {
         self.src.get(self.pos).copied()
@@ -434,7 +437,12 @@ enum Stmt {
     If(Expr, Vec<Stmt>, Option<Vec<Stmt>>),
     While(Expr, Vec<Stmt>),
     // classic for: init ; cond ; update ; body  (lowered to while on emit)
-    For(Option<Box<Stmt>>, Option<Expr>, Option<Box<Stmt>>, Vec<Stmt>),
+    For(
+        Option<Box<Stmt>>,
+        Option<Expr>,
+        Option<Box<Stmt>>,
+        Vec<Stmt>,
+    ),
     ForOf(String, Expr, Vec<Stmt>),
     Break,
     // assignment statement: target, op ("=","+=",...), value
@@ -532,9 +540,9 @@ impl Parser {
 
     fn var_decl(&mut self) -> Result<Stmt, String> {
         self.bump(); // let/const/var
-        // First declarator becomes the returned stmt; extra ones are folded in
-        // by re-emitting — but to keep stmt() single-valued we only support one
-        // declarator per statement (the common case). Multiple are rare.
+                     // First declarator becomes the returned stmt; extra ones are folded in
+                     // by re-emitting — but to keep stmt() single-valued we only support one
+                     // declarator per statement (the common case). Multiple are rare.
         let name = self.ident()?;
         let value = if self.peek() == &Tok::Assign {
             self.bump();
@@ -658,11 +666,19 @@ impl Parser {
         match self.peek() {
             Tok::Inc => {
                 self.bump();
-                return Ok(Stmt::Assign(clone_lvalue(&lhs)?, "+=".into(), Expr::Num(1.0)));
+                return Ok(Stmt::Assign(
+                    clone_lvalue(&lhs)?,
+                    "+=".into(),
+                    Expr::Num(1.0),
+                ));
             }
             Tok::Dec => {
                 self.bump();
-                return Ok(Stmt::Assign(clone_lvalue(&lhs)?, "-=".into(), Expr::Num(1.0)));
+                return Ok(Stmt::Assign(
+                    clone_lvalue(&lhs)?,
+                    "-=".into(),
+                    Expr::Num(1.0),
+                ));
             }
             _ => {}
         }
@@ -941,9 +957,18 @@ impl Parser {
                 let mut fields = Vec::new();
                 while self.peek() != &Tok::RBrace && self.peek() != &Tok::Eof {
                     let key = match self.peek().clone() {
-                        Tok::Id(k) => { self.bump(); k }
-                        Tok::Str(k) => { self.bump(); k }
-                        Tok::Num(n) => { self.bump(); emit_num(n) }
+                        Tok::Id(k) => {
+                            self.bump();
+                            k
+                        }
+                        Tok::Str(k) => {
+                            self.bump();
+                            k
+                        }
+                        Tok::Num(n) => {
+                            self.bump();
+                            emit_num(n)
+                        }
                         other => return Err(format!("Expected object key, got {:?}", other)),
                     };
                     if self.peek() == &Tok::Colon {
@@ -1000,7 +1025,10 @@ impl Parser {
 fn clone_lvalue(e: &Expr) -> Result<Expr, String> {
     match e {
         Expr::Ident(n) => Ok(Expr::Ident(n.clone())),
-        Expr::Index(o, i) => Ok(Expr::Index(Box::new(clone_lvalue(o)?), Box::new(clone_lvalue(i)?))),
+        Expr::Index(o, i) => Ok(Expr::Index(
+            Box::new(clone_lvalue(o)?),
+            Box::new(clone_lvalue(i)?),
+        )),
         Expr::Member(o, n) => Ok(Expr::Member(Box::new(clone_lvalue(o)?), n.clone())),
         Expr::Num(n) => Ok(Expr::Num(*n)),
         _ => Err("invalid target for ++/--".into()),
@@ -1098,7 +1126,13 @@ fn emit_stmt(s: &Stmt, level: usize, out: &mut String) -> Result<(), String> {
         }
         Stmt::Break => out.push_str(&format!("{}break\n", pad)),
         Stmt::Assign(target, op, value) => {
-            out.push_str(&format!("{}{} {} {}\n", pad, emit_expr(target)?, op, emit_expr(value)?));
+            out.push_str(&format!(
+                "{}{} {} {}\n",
+                pad,
+                emit_expr(target)?,
+                op,
+                emit_expr(value)?
+            ));
         }
         Stmt::Expr(e) => out.push_str(&format!("{}{}\n", pad, emit_expr(e)?)),
     }
@@ -1152,7 +1186,12 @@ fn emit_expr(e: &Expr) -> Result<String, String> {
         }
         Expr::Bin(op, l, r) => format!("({} {} {})", emit_expr(l)?, op, emit_expr(r)?),
         Expr::Ternary(c, a, b) => {
-            format!("({} ? {} : {})", emit_expr(c)?, emit_expr(a)?, emit_expr(b)?)
+            format!(
+                "({} ? {} : {})",
+                emit_expr(c)?,
+                emit_expr(a)?,
+                emit_expr(b)?
+            )
         }
         Expr::Index(o, i) => format!("{}[{}]", emit_expr(o)?, emit_expr(i)?),
         Expr::Member(o, name) => {
@@ -1182,7 +1221,7 @@ fn emit_call(callee: &Expr, args: &[Expr]) -> Result<String, String> {
     if let Expr::Member(obj, name) = callee {
         if let Expr::Ident(o) = obj.as_ref() {
             if o == "console" && (name == "log" || name == "error" || name == "info") {
-                return Ok(emit_print(args)?);
+                return emit_print(args);
             }
         }
         // generic method call: obj.method(args)

@@ -53,7 +53,8 @@ impl Validator {
             }
             Stmt::Assign { target, value } => {
                 if !self.defined_vars.contains(target) {
-                    self.errors.push(format!("Undefined variable: '{}'", target));
+                    self.errors
+                        .push(format!("Undefined variable: '{}'", target));
                 }
                 self.validate_expr(value);
             }
@@ -66,7 +67,11 @@ impl Validator {
                 self.validate_expr(obj);
                 self.validate_expr(value);
             }
-            Stmt::If { cond, then_body, else_body } => {
+            Stmt::If {
+                cond,
+                then_body,
+                else_body,
+            } => {
                 self.validate_expr(cond);
                 for s in then_body {
                     self.validate_stmt(s);
@@ -83,7 +88,13 @@ impl Validator {
                     self.validate_stmt(s);
                 }
             }
-            Stmt::Loop { var, from, to, step, body } => {
+            Stmt::Loop {
+                var,
+                from,
+                to,
+                step,
+                body,
+            } => {
                 self.validate_expr(from);
                 self.validate_expr(to);
                 if let Some(s) = step {
@@ -113,7 +124,7 @@ impl Validator {
                 }
             }
             Stmt::Return(Some(e)) => self.validate_expr(e),
-            Stmt::Break => {}, // Break is always valid in loops
+            Stmt::Break => {} // Break is always valid in loops
             Stmt::Expr(e) => self.validate_expr(e),
             _ => {}
         }
@@ -122,9 +133,27 @@ impl Validator {
     fn validate_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Id(name) => {
-                let builtins = vec!["Math", "table", "os", "io", "http", "string", "print", "to_int", "to_float", "to_string", "to_int_str", "input_key", "read_line", "nuke"];
+                let builtins = vec![
+                    "Math",
+                    "table",
+                    "os",
+                    "io",
+                    "http",
+                    "string",
+                    "print",
+                    "to_int",
+                    "to_float",
+                    "to_string",
+                    "to_int_str",
+                    "input_key",
+                    "read_line",
+                    "nuke",
+                ];
                 if !self.defined_vars.contains(name) && !builtins.contains(&name.as_str()) {
-                    self.errors.push(format!("Undefined variable: '{}'. Did you forget to declare it with 'let'?", name));
+                    self.errors.push(format!(
+                        "Undefined variable: '{}'. Did you forget to declare it with 'let'?",
+                        name
+                    ));
                 }
             }
             Expr::BinOp { left, op, right } => {
@@ -139,7 +168,8 @@ impl Validator {
                 if let Expr::Id(name) = func.as_ref() {
                     if name == "nuke" && !self.allow_nuke {
                         self.errors.push(
-                            "'nuke' is a .fred-only call and cannot be used in .lua or .js sources".to_string(),
+                            "'nuke' is a .fred-only call and cannot be used in .lua or .js sources"
+                                .to_string(),
                         );
                     }
                 }
@@ -156,7 +186,18 @@ impl Validator {
                 // Check for invalid method combinations
                 match obj.as_ref() {
                     Expr::Id(n) if n == "Math" => {
-                        if !matches!(method.as_str(), "abs" | "sqrt" | "pow" | "floor" | "ceil" | "round" | "max" | "min" | "random") {
+                        if !matches!(
+                            method.as_str(),
+                            "abs"
+                                | "sqrt"
+                                | "pow"
+                                | "floor"
+                                | "ceil"
+                                | "round"
+                                | "max"
+                                | "min"
+                                | "random"
+                        ) {
                             self.errors.push(format!("Unknown Math method: '{}'. Available: abs, sqrt, pow, floor, ceil, round, max, min, random", method));
                         }
                     }
@@ -166,31 +207,49 @@ impl Validator {
                         }
                     }
                     Expr::Id(n) if n == "os" => {
-                        if !matches!(method.as_str(), "time" | "exit" | "getenv" | "system" | "sleep") {
+                        if !matches!(
+                            method.as_str(),
+                            "time" | "exit" | "getenv" | "system" | "sleep"
+                        ) {
                             self.errors.push(format!("Unknown os method: '{}'. Available: time, exit, getenv, system, sleep", method));
                         }
                     }
                     Expr::Id(n) if n == "http" => {
                         if !matches!(method.as_str(), "get" | "post" | "get_file") {
-                            self.errors.push(format!("Unknown http method: '{}'. Available: get, post, get_file", method));
+                            self.errors.push(format!(
+                                "Unknown http method: '{}'. Available: get, post, get_file",
+                                method
+                            ));
                         }
                     }
                     Expr::Id(n) if n == "io" => {
                         if !matches!(method.as_str(), "open" | "close" | "read" | "write") {
-                            self.errors.push(format!("Unknown io method: '{}'. Available: open, close, read, write", method));
+                            self.errors.push(format!(
+                                "Unknown io method: '{}'. Available: open, close, read, write",
+                                method
+                            ));
                         }
                     }
                     Expr::Id(n) if n == "string" => {
                         if !matches!(method.as_str(), "find" | "split") {
-                            self.errors.push(format!("Unknown string method: '{}'. Available: find, split", method));
+                            self.errors.push(format!(
+                                "Unknown string method: '{}'. Available: find, split",
+                                method
+                            ));
                         }
                     }
                     _ => {
                         // Check if method exists for arrays and strings
-                        let valid_array_methods = vec!["map", "filter", "reduce", "slice", "join", "includes", "len", "push", "pop"];
-                        let valid_string_methods = vec!["length", "uppercase", "lowercase", "substring"];
+                        let valid_array_methods = vec![
+                            "map", "filter", "reduce", "slice", "join", "includes", "len", "push",
+                            "pop",
+                        ];
+                        let valid_string_methods =
+                            ["length", "uppercase", "lowercase", "substring"];
 
-                        if !valid_array_methods.contains(&method.as_str()) && !valid_string_methods.contains(&method.as_str()) {
+                        if !valid_array_methods.contains(&method.as_str())
+                            && !valid_string_methods.contains(&method.as_str())
+                        {
                             // Allow it for now since we can't determine type at validation time
                             // Better error handling would require type inference
                         }
@@ -206,7 +265,8 @@ impl Validator {
                 for e in elems {
                     self.validate_expr(e);
                     if matches!(e, Expr::String(_)) {
-                        self.errors.push("Arrays cannot contain strings (only numbers)".to_string());
+                        self.errors
+                            .push("Arrays cannot contain strings (only numbers)".to_string());
                     }
                 }
             }
@@ -232,12 +292,56 @@ impl Validator {
                     }
                 }
             }
-            Expr::Ternary { cond, then_expr, else_expr } => {
+            Expr::Ternary {
+                cond,
+                then_expr,
+                else_expr,
+            } => {
                 self.validate_expr(cond);
                 self.validate_expr(then_expr);
                 self.validate_expr(else_expr);
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::tokenize;
+    use crate::parser::parse;
+
+    fn check(src: &str, allow_nuke: bool) -> Result<(), Vec<String>> {
+        let ast = parse(tokenize(src).unwrap()).unwrap();
+        let mut v = Validator::new();
+        v.set_allow_nuke(allow_nuke);
+        v.validate(&ast)
+    }
+
+    #[test]
+    fn accepts_declared_variable() {
+        assert!(check("let x = 1\nprint(x)", true).is_ok());
+    }
+
+    #[test]
+    fn rejects_undefined_variable() {
+        assert!(check("print(mystery)", true).is_err());
+    }
+
+    #[test]
+    fn rejects_string_in_array() {
+        assert!(check("let a = [1, \"two\"]", true).is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_math_method() {
+        assert!(check("let y = Math.frobnicate(4)", true).is_err());
+    }
+
+    #[test]
+    fn nuke_gated_on_allow_flag() {
+        assert!(check("nuke()", true).is_ok());
+        assert!(check("nuke()", false).is_err());
     }
 }

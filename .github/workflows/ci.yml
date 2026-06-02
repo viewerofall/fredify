@@ -24,6 +24,10 @@ jobs:
         with:
           workspaces: fredc
 
+      # Rust unit tests for the lexer / parser / validator / codegen stages.
+      - name: Unit tests
+        run: cargo test --release --manifest-path fredc/Cargo.toml
+
       # `make test` depends on `build` depends on `check-deps`, so this one
       # target compiles fredc and then every example (.fred/.js/.lua).
       - name: Compile all examples
@@ -33,3 +37,13 @@ jobs:
       # Catches codegen that compiles but behaves wrong (float fmt, dict dispatch).
       - name: Run examples + check output
         run: make test-run
+
+      # Assert the compiler rejects bad programs (undefined vars, bad methods,
+      # nuke outside .fred, syntax errors). Guards the validator/parser.
+      - name: Negative tests
+        run: make test-fail
+
+      # Compile + run every runnable example's generated C under ASan/UBSan to
+      # prove the emitted runtime has no overflow / use-after-free / signed UB.
+      - name: Sanitizer run
+        run: make test-asan

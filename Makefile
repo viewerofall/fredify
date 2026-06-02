@@ -1,21 +1,21 @@
-.PHONY: install build clean check-deps help uninstall test test-run gold
+.PHONY: install build clean check-deps help uninstall test test-run test-fail test-asan gold
 
 INSTALL_PREFIX ?= $(HOME)/.local/bin
 FREDC_BINARY := fredc/target/release/fredc
 FRED_WRAPPER := $(INSTALL_PREFIX)/fred
 
 # Every example compiles (make test). A deterministic subset also gets run and
-# diffed against golden output (make test-run). Excluded: random, stdin, network,
-# and environment-dependent output (07 prints len($HOME), differs per machine).
+# diffed against golden output (make test-run). Made deterministic via:
+#   FRED_SEED  - fixed RNG seed so Math.random() is reproducible
+#   HOME       - pinned so os.getenv("HOME") output is machine-independent
+#   <name>.in  - if examples/expected/<name>.in exists it is piped as stdin,
+#                so input_key()/read_line() examples can be driven from a fixture
+# Still excluded: 13 (realtime raw-terminal render loop) and 15 (live network).
+RUN_ENV := FRED_SEED=1 HOME=/fred_test_home
 ALL_EXAMPLES := $(wildcard examples/*.fred examples/*.js examples/*.lua)
 SKIP_RUN := \
-	examples/04_math_library.fred \
-	examples/07_advanced_features.fred \
-	examples/11_rock_paper_scissors.fred \
-	examples/12_number_guessing_game.fred \
 	examples/13_snake_game.fred \
-	examples/15_weather_http.fred \
-	examples/17_rock_paper_scissors.js
+	examples/15_weather_http.fred
 RUN_EXAMPLES := $(filter-out $(SKIP_RUN),$(ALL_EXAMPLES))
 
 help:
@@ -26,6 +26,8 @@ help:
 	@echo "  make build        Build fredc binary only"
 	@echo "  make test         Compile every example (.fred/.js/.lua)"
 	@echo "  make test-run     Run deterministic examples, diff vs golden output"
+	@echo "  make test-fail    Assert examples/should_fail/* are rejected (non-zero exit)"
+	@echo "  make test-asan    Run examples under AddressSanitizer + UBSan"
 	@echo "  make gold         Regenerate golden output (after intended changes)"
 	@echo "  make check-deps   Check system dependencies"
 	@echo "  make clean        Remove build artifacts"
@@ -55,7 +57,7 @@ install: build
 	@echo '  case "$$1" in' >> /tmp/fred_wrapper.sh
 	@echo '    -h|--help|help) exec "$$FREDC" --help;;' >> /tmp/fred_wrapper.sh
 	@echo '    -o|--output) ARGS+=("$$1" "$$2"); shift 2;;' >> /tmp/fred_wrapper.sh
-	@echo '    --to-lua|--to-fred|--to-c) ARGS+=("$$1"); shift;;' >> /tmp/fred_wrapper.sh
+	@echo '    --to-fred|--to-c) ARGS+=("$$1"); shift;;' >> /tmp/fred_wrapper.sh
 	@echo '    *) FILE="$$1"; break;;' >> /tmp/fred_wrapper.sh
 	@echo '  esac' >> /tmp/fred_wrapper.sh
 	@echo 'done' >> /tmp/fred_wrapper.sh
@@ -105,7 +107,8 @@ test-run: build
 		if ! $(FREDC_BINARY) "$$f" /tmp/fredrun/bin > /dev/null 2>&1; then \
 			echo "COMPILE FAIL"; fail=1; continue; \
 		fi; \
-		/tmp/fredrun/bin > /tmp/fredrun/got 2>&1; \
+		in="examples/expected/$$name.in"; [ -f "$$in" ] || in=/dev/null; \
+		$(RUN_ENV) /tmp/fredrun/bin < "$$in" > /tmp/fredrun/got 2>&1; \
 		if [ ! -f "examples/expected/$$name.out" ]; then \
 			echo "NO GOLDEN (run: make gold)"; fail=1; continue; \
 		fi; \
@@ -119,6 +122,51 @@ test-run: build
 	if [ $$fail -ne 0 ]; then echo "✗ test-run failures"; exit 1; fi
 	@echo "✓ All runnable examples match golden output"
 
+# Negative tests: every file in examples/should_fail/ MUST be rejected by the
+# compiler (lexer/parser/validator). A zero exit here means a guardrail broke.
+test-fail: build
+	@echo "Checking should_fail cases are rejected..."
+	@fail=0; \
+	for f in examples/should_fail/*; do \
+		printf '  %-45s ' "$$(basename $$f)"; \
+		if $(FREDC_BINARY) "$$f" /tmp/fredfail_out > /dev/null 2>&1; then \
+			echo "LEAK (compiled, should have failed)"; fail=1; \
+		else \
+			echo "ok (rejected)"; \
+		fi; \
+	done; \
+	rm -f /tmp/fredfail_out /tmp/fredfail_out.c; \
+	if [ $$fail -ne 0 ]; then echo "✗ a should_fail case compiled"; exit 1; fi
+	@echo "✓ All should_fail cases rejected"
+
+# Build the generated C for each runnable example with ASan + UBSan and run it.
+# Any heap overflow / use-after-free / signed-overflow surfaces as a hard fail.
+# Leak detection is off: the runtime intentionally never frees (documented).
+test-asan: build
+	@echo "Running examples under AddressSanitizer + UBSan..."
+	@mkdir -p /tmp/fredasan
+	@fail=0; \
+	for f in $(RUN_EXAMPLES); do \
+		name=$$(basename $$f); \
+		printf '  %-40s ' "$$name"; \
+		if ! $(FREDC_BINARY) --to-c "$$f" /tmp/fredasan/p > /dev/null 2>&1; then \
+			echo "CODEGEN FAIL"; fail=1; continue; \
+		fi; \
+		if ! gcc -fsanitize=address,undefined -g -o /tmp/fredasan/bin /tmp/fredasan/p.c -lm 2>/tmp/fredasan/cc; then \
+			echo "CC FAIL"; fail=1; sed 's/^/      /' /tmp/fredasan/cc; continue; \
+		fi; \
+		in="examples/expected/$$name.in"; [ -f "$$in" ] || in=/dev/null; \
+		ASAN_OPTIONS=detect_leaks=0 $(RUN_ENV) /tmp/fredasan/bin < "$$in" > /dev/null 2>/tmp/fredasan/err; \
+		if grep -qE 'runtime error|AddressSanitizer|UndefinedBehaviorSanitizer' /tmp/fredasan/err; then \
+			echo "SANITIZER ERROR"; fail=1; sed 's/^/      /' /tmp/fredasan/err; \
+		else \
+			echo "clean"; \
+		fi; \
+	done; \
+	rm -rf /tmp/fredasan example_output.txt; \
+	if [ $$fail -ne 0 ]; then echo "✗ sanitizer findings"; exit 1; fi
+	@echo "✓ No memory/UB errors across runnable examples"
+
 # Regenerate golden output. Run this when output legitimately changes, then
 # eyeball `git diff examples/expected/` before committing.
 gold: build
@@ -126,7 +174,8 @@ gold: build
 	@for f in $(RUN_EXAMPLES); do \
 		name=$$(basename $$f); \
 		if $(FREDC_BINARY) "$$f" /tmp/fredrun/bin > /dev/null 2>&1; then \
-			/tmp/fredrun/bin > "examples/expected/$$name.out" 2>&1; \
+			in="examples/expected/$$name.in"; [ -f "$$in" ] || in=/dev/null; \
+			$(RUN_ENV) /tmp/fredrun/bin < "$$in" > "examples/expected/$$name.out" 2>&1; \
 			echo "  gold $$name"; \
 		else \
 			echo "  SKIP $$name (compile failed)"; \

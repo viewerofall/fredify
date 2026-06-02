@@ -73,7 +73,10 @@ impl Parser {
                         None => rhs,
                     };
                     match expr {
-                        Expr::Id(name) => Ok(Stmt::Assign { target: name, value }),
+                        Expr::Id(name) => Ok(Stmt::Assign {
+                            target: name,
+                            value,
+                        }),
                         Expr::Index { obj, index } => Ok(Stmt::AssignIndex {
                             obj: *obj,
                             index: *index,
@@ -84,7 +87,10 @@ impl Parser {
                             field,
                             value,
                         }),
-                        _ => Err("Can only assign to identifiers, array elements, or object fields".to_string()),
+                        _ => Err(
+                            "Can only assign to identifiers, array elements, or object fields"
+                                .to_string(),
+                        ),
                     }
                 } else {
                     Ok(Stmt::Expr(expr))
@@ -288,7 +294,10 @@ impl Parser {
 
     fn parse_case_body(&mut self) -> Result<Vec<Stmt>, String> {
         let mut stmts = Vec::new();
-        while !matches!(self.peek(), Token::Case | Token::Default | Token::RBrace | Token::Eof) {
+        while !matches!(
+            self.peek(),
+            Token::Case | Token::Default | Token::RBrace | Token::Eof
+        ) {
             stmts.push(self.parse_stmt()?);
         }
         Ok(stmts)
@@ -700,4 +709,69 @@ impl Parser {
 pub fn parse(tokens: Vec<Token>) -> Result<Vec<Stmt>, String> {
     let mut parser = Parser::new(tokens);
     parser.parse_program()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::Expr;
+    use crate::lexer::tokenize;
+
+    fn ast(src: &str) -> Vec<Stmt> {
+        parse(tokenize(src).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn parses_let_binding() {
+        let stmts = ast("let x = 7");
+        match &stmts[0] {
+            Stmt::Let {
+                name,
+                value: Some(Expr::Number(n)),
+            } => {
+                assert_eq!(name, "x");
+                assert_eq!(*n, 7.0);
+            }
+            other => panic!("expected let, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_function_def() {
+        let stmts = ast("fn add(a, b) { return a + b }");
+        match &stmts[0] {
+            Stmt::FnDef { name, params, body } => {
+                assert_eq!(name, "add");
+                assert_eq!(params, &["a", "b"]);
+                assert_eq!(body.len(), 1);
+            }
+            other => panic!("expected fn def, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn respects_operator_precedence() {
+        // 1 + 2 * 3 must parse as 1 + (2 * 3), i.e. top op is `+`.
+        let stmts = ast("let x = 1 + 2 * 3");
+        match &stmts[0] {
+            Stmt::Let {
+                value: Some(Expr::BinOp { op, right, .. }),
+                ..
+            } => {
+                assert_eq!(op, "+");
+                assert!(matches!(right.as_ref(), Expr::BinOp { op, .. } if op == "*"));
+            }
+            other => panic!("expected binop let, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn incomplete_let_is_error() {
+        assert!(parse(tokenize("let x =").unwrap()).is_err());
+    }
+
+    #[test]
+    fn unbalanced_brace_is_error() {
+        assert!(parse(tokenize("fn f() {").unwrap()).is_err());
+    }
 }

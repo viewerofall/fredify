@@ -1,0 +1,36 @@
+name: lint
+
+# Style + lint gate, kept separate from the build/examples CI so a formatting
+# or clippy regression is obvious at a glance and doesn't get buried under
+# compile output.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: rustfmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fredc
+
+      # The tree must stay rustfmt-clean.
+      - name: Format check
+        run: cargo fmt --manifest-path fredc/Cargo.toml -- --check
+
+      # Fail on any warning so the tree stays clippy-clean.
+      - name: Clippy
+        run: cargo clippy --release --manifest-path fredc/Cargo.toml -- -D warnings
