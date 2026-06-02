@@ -45,6 +45,10 @@ impl Parser {
             Token::Loop => self.parse_loop(),
             Token::For => self.parse_for_in(),
             Token::Return => self.parse_return(),
+            Token::Break => {
+                self.advance();
+                Ok(Stmt::Break)
+            }
             Token::Switch => self.parse_switch(),
             _ => {
                 let expr = self.parse_expr()?;
@@ -276,7 +280,23 @@ impl Parser {
     }
 
     fn parse_expr(&mut self) -> Result<Expr, String> {
-        self.parse_or()
+        self.parse_ternary()
+    }
+
+    fn parse_ternary(&mut self) -> Result<Expr, String> {
+        let mut expr = self.parse_or()?;
+        if self.peek() == &Token::Question {
+            self.advance();
+            let then_expr = self.parse_or()?;
+            self.expect(Token::Colon)?;
+            let else_expr = self.parse_ternary()?;
+            expr = Expr::Ternary {
+                cond: Box::new(expr),
+                then_expr: Box::new(then_expr),
+                else_expr: Box::new(else_expr),
+            };
+        }
+        Ok(expr)
     }
 
     fn parse_or(&mut self) -> Result<Expr, String> {

@@ -152,8 +152,8 @@ impl CGen {
         self.output.push_str("int64_t math_floor(double x) { return (int64_t)floor(x); }\n");
         self.output.push_str("int64_t math_ceil(double x) { return (int64_t)ceil(x); }\n");
         self.output.push_str("int64_t math_round(double x) { return (int64_t)round(x); }\n");
-        self.output.push_str("double math_sqrt(double x) { return sqrt(x); }\n");
-        self.output.push_str("double math_pow(double x, double y) { return pow(x, y); }\n");
+        self.output.push_str("int64_t math_sqrt(double x) { return (int64_t)sqrt(x); }\n");
+        self.output.push_str("int64_t math_pow(double x, double y) { return (int64_t)pow(x, y); }\n");
         self.output.push_str("int64_t math_max(int64_t a, int64_t b) { return (a > b) ? a : b; }\n");
         self.output.push_str("int64_t math_min(int64_t a, int64_t b) { return (a < b) ? a : b; }\n");
         self.output.push_str("int64_t math_random() { return rand() % 1000000; }\n\n");
@@ -430,6 +430,9 @@ impl CGen {
                 } else {
                     self.emit("return 0;");
                 }
+            }
+            Stmt::Break => {
+                self.emit("break;");
             }
             Stmt::Expr(expr) => {
                 let expr_str = self.gen_expr(expr);
@@ -846,6 +849,12 @@ impl CGen {
                     parts.iter().cloned().reduce(|a, b| format!("string_concat({}, {})", a, b)).unwrap()
                 }
             }
+            Expr::Ternary { cond, then_expr, else_expr } => {
+                let cond_str = self.gen_expr(cond);
+                let then_str = self.gen_expr(then_expr);
+                let else_str = self.gen_expr(else_expr);
+                format!("(({}) ? ({}) : ({}))", cond_str, then_str, else_str)
+            }
         }
     }
 
@@ -884,6 +893,9 @@ impl CGen {
                 } else {
                     false
                 }
+            }
+            Expr::Ternary { then_expr, else_expr, .. } => {
+                self.expr_returns_string(then_expr) || self.expr_returns_string(else_expr)
             }
             _ => false,
         }
@@ -975,6 +987,11 @@ impl CGen {
                 for elem in elements {
                     self.scan_expr_for_closures(elem);
                 }
+            }
+            Expr::Ternary { cond, then_expr, else_expr } => {
+                self.scan_expr_for_closures(cond);
+                self.scan_expr_for_closures(then_expr);
+                self.scan_expr_for_closures(else_expr);
             }
             _ => {}
         }

@@ -97,6 +97,7 @@ impl Validator {
                 }
             }
             Stmt::Return(Some(e)) => self.validate_expr(e),
+            Stmt::Break => {}, // Break is always valid in loops
             Stmt::Expr(e) => self.validate_expr(e),
             _ => {}
         }
@@ -107,7 +108,7 @@ impl Validator {
             Expr::Id(name) => {
                 let builtins = vec!["Math", "table", "os", "io", "string", "print", "to_int", "to_float", "to_string", "to_int_str"];
                 if !self.defined_vars.contains(name) && !builtins.contains(&name.as_str()) {
-                    self.errors.push(format!("Undefined variable: '{}'", name));
+                    self.errors.push(format!("Undefined variable: '{}'. Did you forget to declare it with 'let'?", name));
                 }
             }
             Expr::BinOp { left, op, right } => {
@@ -130,28 +131,42 @@ impl Validator {
                     self.validate_expr(arg);
                 }
                 // Check for invalid method combinations
-                match (obj.as_ref(), method.as_str()) {
-                    (Expr::Id(n), m) if n == "table" => {
-                        if !matches!(m, "insert" | "remove" | "concat" | "sort") {
-                            self.errors.push(format!("Unknown table method: '{}'", m));
+                match obj.as_ref() {
+                    Expr::Id(n) if n == "Math" => {
+                        if !matches!(method.as_str(), "abs" | "sqrt" | "pow" | "floor" | "ceil" | "round" | "max" | "min" | "random") {
+                            self.errors.push(format!("Unknown Math method: '{}'. Available: abs, sqrt, pow, floor, ceil, round, max, min, random", method));
                         }
                     }
-                    (Expr::Id(n), m) if n == "os" => {
-                        if !matches!(m, "time" | "exit" | "getenv" | "system") {
-                            self.errors.push(format!("Unknown os method: '{}'", m));
+                    Expr::Id(n) if n == "table" => {
+                        if !matches!(method.as_str(), "insert" | "remove" | "concat" | "sort") {
+                            self.errors.push(format!("Unknown table method: '{}'. Available: insert, remove, concat, sort", method));
                         }
                     }
-                    (Expr::Id(n), m) if n == "io" => {
-                        if !matches!(m, "open" | "close" | "read" | "write") {
-                            self.errors.push(format!("Unknown io method: '{}'", m));
+                    Expr::Id(n) if n == "os" => {
+                        if !matches!(method.as_str(), "time" | "exit" | "getenv" | "system") {
+                            self.errors.push(format!("Unknown os method: '{}'. Available: time, exit, getenv, system", method));
                         }
                     }
-                    (Expr::Id(n), m) if n == "string" => {
-                        if !matches!(m, "find" | "split") {
-                            self.errors.push(format!("Unknown string method: '{}'", m));
+                    Expr::Id(n) if n == "io" => {
+                        if !matches!(method.as_str(), "open" | "close" | "read" | "write") {
+                            self.errors.push(format!("Unknown io method: '{}'. Available: open, close, read, write", method));
                         }
                     }
-                    _ => {}
+                    Expr::Id(n) if n == "string" => {
+                        if !matches!(method.as_str(), "find" | "split") {
+                            self.errors.push(format!("Unknown string method: '{}'. Available: find, split", method));
+                        }
+                    }
+                    _ => {
+                        // Check if method exists for arrays and strings
+                        let valid_array_methods = vec!["map", "filter", "reduce", "slice", "join", "includes", "len", "push", "pop"];
+                        let valid_string_methods = vec!["length", "uppercase", "lowercase", "substring"];
+
+                        if !valid_array_methods.contains(&method.as_str()) && !valid_string_methods.contains(&method.as_str()) {
+                            // Allow it for now since we can't determine type at validation time
+                            // Better error handling would require type inference
+                        }
+                    }
                 }
             }
             Expr::Index { obj, index } => {
@@ -183,6 +198,11 @@ impl Validator {
                         self.validate_expr(e);
                     }
                 }
+            }
+            Expr::Ternary { cond, then_expr, else_expr } => {
+                self.validate_expr(cond);
+                self.validate_expr(then_expr);
+                self.validate_expr(else_expr);
             }
             _ => {}
         }

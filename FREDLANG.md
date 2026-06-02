@@ -98,6 +98,28 @@ switch (code) {
 }
 ```
 
+#### break (early loop exit)
+```fred
+loop i from 1 to 10 {
+    if (i == 5) {
+        break
+    }
+    print(i)
+}
+// Output: 1 2 3 4
+```
+
+#### Ternary operator
+```fred
+let x = 15
+let category = (x < 10) ? "small" : (x < 20) ? "medium" : "large"
+print(category)  // "medium"
+
+let status = 200
+let msg = (status == 200) ? "OK" : "Error"
+print(msg)
+```
+
 ---
 
 ## Type System

@@ -40,12 +40,21 @@ install: build install-node-deps
 	@echo '#!/bin/bash' > /tmp/fred_wrapper.sh
 	@echo 'FREDC="$$(dirname "$$0")/fredc-bin"' >> /tmp/fred_wrapper.sh
 	@echo 'CASTL="$(HOME)/.local/share/fredify/castl-js"' >> /tmp/fred_wrapper.sh
-	@echo '[ $$# -eq 0 ] && exec "$$FREDC"' >> /tmp/fred_wrapper.sh
-	@echo 'FILE="$$1"' >> /tmp/fred_wrapper.sh
+	@echo 'ARGS=()' >> /tmp/fred_wrapper.sh
+	@echo 'FILE=""' >> /tmp/fred_wrapper.sh
+	@echo 'while [[ $$# -gt 0 ]]; do' >> /tmp/fred_wrapper.sh
+	@echo '  case "$$1" in' >> /tmp/fred_wrapper.sh
+	@echo '    -h|--help|help) exec "$$FREDC" --help;;' >> /tmp/fred_wrapper.sh
+	@echo '    -o|--output) ARGS+=("$$1" "$$2"); shift 2;;' >> /tmp/fred_wrapper.sh
+	@echo '    --to-lua|--to-fred|--to-c) ARGS+=("$$1"); shift;;' >> /tmp/fred_wrapper.sh
+	@echo '    *) FILE="$$1"; break;;' >> /tmp/fred_wrapper.sh
+	@echo '  esac' >> /tmp/fred_wrapper.sh
+	@echo 'done' >> /tmp/fred_wrapper.sh
+	@echo '[ -z "$$FILE" ] && exec "$$FREDC"' >> /tmp/fred_wrapper.sh
 	@echo 'case "$$FILE" in' >> /tmp/fred_wrapper.sh
-	@echo '  *.js) TMP="/tmp/$$(basename "$$FILE" .js).lua"; node "$$CASTL/castl.js" "$$FILE" > "$$TMP" 2>/dev/null && exec "$$FREDC" "$$TMP" "$${2:-./$$(basename "$$FILE" .js)}" || exit 1;;' >> /tmp/fred_wrapper.sh
-	@echo '  *.lua|*.fred) exec "$$FREDC" "$$FILE" "$${2:-./$$(basename "$$FILE" | sed "s/\.[^.]*$$//")}";;' >> /tmp/fred_wrapper.sh
-	@echo '  *) echo "Use .fred/.lua/.js file"; exit 1;;' >> /tmp/fred_wrapper.sh
+	@echo '  *.js) TMP="/tmp/$$(basename "$$FILE" .js).lua"; OUTPUT="$${2:-./$$(basename "$$FILE" .js)}"; node "$$CASTL/castl.js" "$$FILE" > "$$TMP" 2>/dev/null || exit 1; if [[ "$${ARGS[@]}" == *"--to-lua"* ]]; then cp "$$TMP" "$$OUTPUT.lua"; echo "✓ Generated: $$OUTPUT.lua"; else exec "$$FREDC" "$${ARGS[@]}" "$$TMP" "$$OUTPUT"; fi;;' >> /tmp/fred_wrapper.sh
+	@echo '  *.lua|*.fred) OUTPUT="$${2:-./$$(basename "$$FILE" | sed '\''s/\.[^.]*$$//'\'')}" ; exec "$$FREDC" "$${ARGS[@]}" "$$FILE" "$$OUTPUT";;' >> /tmp/fred_wrapper.sh
+	@echo '  *) exec "$$FREDC" "$${ARGS[@]}" "$$FILE";;' >> /tmp/fred_wrapper.sh
 	@echo 'esac' >> /tmp/fred_wrapper.sh
 	@cp /tmp/fred_wrapper.sh $(FRED_WRAPPER) && chmod +x $(FRED_WRAPPER) && rm /tmp/fred_wrapper.sh
 	@echo "✓ Installed! Run: export PATH=$(INSTALL_PREFIX):$$PATH && fred"

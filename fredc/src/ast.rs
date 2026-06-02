@@ -30,6 +30,7 @@ pub enum Stmt {
         body: Vec<Stmt>,
     },
     Return(Option<Expr>),
+    Break,
     Expr(Expr),
     ForIn {
         var: String,
@@ -82,6 +83,11 @@ pub enum Expr {
         body: Vec<Stmt>,
     },
     TemplateString(Vec<TemplateStringNode>),
+    Ternary {
+        cond: Box<Expr>,
+        then_expr: Box<Expr>,
+        else_expr: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone)]

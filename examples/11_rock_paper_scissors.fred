@@ -1,0 +1,69 @@
+// Game: Rock Paper Scissors simulator
+// Demonstrates: Game logic, control flow, random choices
+
+fn play_round(round_num) {
+    print(`--- Round ${round_num} ---`)
+
+    // Seed-based pseudo-random choice
+    let seed = os.time() + round_num
+    let computer_choice = seed % 3  // 0=rock, 1=paper, 2=scissors
+
+    // Simulate player choice (rotate through)
+    let player_choice = round_num % 3
+
+    let computer_str = "rock"
+    if (computer_choice == 1) {
+        computer_str = "paper"
+    }
+    if (computer_choice == 2) {
+        computer_str = "scissors"
+    }
+
+    let player_str = "rock"
+    if (player_choice == 1) {
+        player_str = "paper"
+    }
+    if (player_choice == 2) {
+        player_str = "scissors"
+    }
+
+    print(`Player: ${player_str}`)
+    print(`Computer: ${computer_str}`)
+
+    // Determine winner
+    if (player_choice == computer_choice) {
+        print("Result: TIE")
+    } else {
+        if (player_choice == 0) {
+            if (computer_choice == 2) {
+                print("Result: Player wins")
+            } else {
+                print("Result: Computer wins")
+            }
+        } else {
+            if (player_choice == 1) {
+                if (computer_choice == 0) {
+                    print("Result: Player wins")
+                } else {
+                    print("Result: Computer wins")
+                }
+            } else {
+                if (computer_choice == 1) {
+                    print("Result: Player wins")
+                } else {
+                    print("Result: Computer wins")
+                }
+            }
+        }
+    }
+    print("")
+}
+
+print("=== Rock Paper Scissors Game ===")
+print("")
+
+loop round from 1 to 5 {
+    play_round(round)
+}
+
+print("Game complete!")
