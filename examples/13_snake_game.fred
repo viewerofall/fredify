@@ -1,77 +1,124 @@
-// Game: Simple Snake
-// Demonstrates: Arrays, game state, loops, break, ternary
-
-fn draw_board(snake_x, snake_y, food_x, food_y, width, height) {
-    loop y from 0 to height - 1 {
-        loop x from 0 to width - 1 {
-            let cell = (x == snake_x and y == snake_y) ? "@" : (x == food_x and y == food_y) ? "*" : "."
-            print(cell)
-        }
-        print("")
-    }
-    print("")
-}
+// Game: Snake - real interactive play with arrow keys / WASD
+// Demonstrates: input_key() raw keyboard input, arrays as a ring body, game loop
+//
+// Controls: Arrow keys or WASD to move, q to quit.
+// The snake body is stored in growing arrays (snake_x / snake_y).
+// A "tail" index marks the current tail; pushing a new head and
+// advancing the tail moves the snake without index assignment.
 
 fn play_snake() {
-    let width = 10
-    let height = 6
+    let width = 20
+    let height = 20
 
-    let snake_x = 5
-    let snake_y = 3
-    let food_x = 8
-    let food_y = 2
+    // Snake body: head is the LAST element. Starts length 3 moving right.
+    let snake_x = [3, 4, 5]
+    let snake_y = [5, 5, 5]
+    let tail = 0
 
-    let moves = 0
-    let max_moves = 15
+    let dir_x = 1
+    let dir_y = 0
+
+    let apple_x = 10
+    let apple_y = 10
+
     let score = 0
+    let alive = 1
 
-    print("=== SNAKE GAME ===")
-    print("")
-    print("Controls: @ is snake, * is food, . is empty")
-    print("")
+    print("=== SNAKE ===")
+    print("Arrow keys or WASD to move, q to quit.")
+    print("Press any key to start...")
+    let ignore = input_key()
 
-    while (moves < max_moves) {
-        print(`Move ${moves + 1}: Score=${score}`)
-        draw_board(snake_x, snake_y, food_x, food_y, width, height)
+    while (alive == 1) {
+        os.system("clear")
+        print(`Score: ${score}   (arrows/WASD, q=quit)`)
 
-        // Simple AI: move towards food
-        let dx = (food_x > snake_x) ? 1 : (food_x < snake_x) ? -1 : 0
-        let dy = (food_y > snake_y) ? 1 : (food_y < snake_y) ? -1 : 0
-
-        // Move snake
-        snake_x = snake_x + dx
-        snake_y = snake_y + dy
-
-        // Wrap edges
-        if (snake_x < 0) {
-            snake_x = width - 1
-        }
-        if (snake_x >= width) {
-            snake_x = 0
-        }
-        if (snake_y < 0) {
-            snake_y = height - 1
-        }
-        if (snake_y >= height) {
-            snake_y = 0
-        }
-
-        // Check collision with food
-        if (snake_x == food_x and snake_y == food_y) {
-            score = score + 10
-            print("*** FOOD EATEN! ***")
-
-            // Respawn food
-            food_x = (Math.random() * 10000) % width
-            food_y = (Math.random() * 10000) % height
+        // Draw the board
+        loop y from 0 to height - 1 {
+            let row = ""
+            loop x from 0 to width - 1 {
+                let ch = "."
+                if (x == apple_x and y == apple_y) {
+                    ch = "O"
+                }
+                // body cells
+                let bi = tail
+                while (bi < snake_x.len()) {
+                    if (snake_x[bi] == x and snake_y[bi] == y) {
+                        ch = "#"
+                    }
+                    bi = bi + 1
+                }
+                // head cell (drawn last so it wins)
+                let hidx = snake_x.len() - 1
+                if (snake_x[hidx] == x and snake_y[hidx] == y) {
+                    ch = "@"
+                }
+                row = row + ch
+            }
+            print(row)
         }
 
-        moves = moves + 1
+        // Read a key and update direction (block reversing onto self)
+        let key = input_key()
+        if (key == 113) {
+            alive = 0
+        }
+        if ((key == 1 or key == 119) and dir_y != 1) {
+            dir_x = 0
+            dir_y = -1
+        }
+        if ((key == 2 or key == 115) and dir_y != -1) {
+            dir_x = 0
+            dir_y = 1
+        }
+        if ((key == 3 or key == 100) and dir_x != -1) {
+            dir_x = 1
+            dir_y = 0
+        }
+        if ((key == 4 or key == 97) and dir_x != 1) {
+            dir_x = -1
+            dir_y = 0
+        }
+
+        // Compute new head
+        let head_idx = snake_x.len() - 1
+        let new_x = snake_x[head_idx] + dir_x
+        let new_y = snake_y[head_idx] + dir_y
+
+        // Wall collision = death
+        if (new_x < 0 or new_x >= width or new_y < 0 or new_y >= height) {
+            alive = 0
+        }
+
+        // Self collision = death
+        let ci = tail
+        while (ci < snake_x.len()) {
+            if (snake_x[ci] == new_x and snake_y[ci] == new_y) {
+                alive = 0
+            }
+            ci = ci + 1
+        }
+
+        if (alive == 1) {
+            snake_x.push(new_x)
+            snake_y.push(new_y)
+
+            if (new_x == apple_x and new_y == apple_y) {
+                // Eat: grow (don't advance tail), spawn new apple
+                score = score + 10
+                apple_x = (Math.random() * 7919) % width
+                apple_y = (Math.random() * 7919) % height
+            } else {
+                // Normal move: advance tail to keep length constant
+                tail = tail + 1
+            }
+        }
     }
 
-    print(`=== GAME OVER ===`)
+    os.system("clear")
+    print("=== GAME OVER ===")
     print(`Final Score: ${score}`)
-    print(`Moves: ${moves}`)
 }
 
 play_snake()

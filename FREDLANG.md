@@ -35,6 +35,23 @@ let b = true            // int64_t (0 or 1)
 
 Type inference is automatic. You don't declare types—the compiler figures them out.
 
+#### Assignment
+
+```fred
+let x = 5
+x = 10                  // reassign
+
+let arr = [1, 2, 3]
+arr[1] = 99             // assign to an array element
+
+// Compound assignment (works on variables and array elements)
+x += 3                  // x = x + 3
+x -= 1                  // x = x - 1
+x *= 2                  // x = x * 2
+x /= 4                  // x = x / 4
+arr[0] += 100
+```
+
 ### Functions
 
 ```fred
@@ -172,6 +189,9 @@ s.length()
 s.uppercase()
 s.lowercase()
 s.substring(0, 3)       // "hel"
+s.trim()                // strip leading/trailing whitespace
+s.char_at(1)            // "e" (one-char String; empty if out of range)
+s.replace("l", "L")     // "heLLo" (replaces all occurrences)
 
 string.find(s, "ll")    // position
 string.split(s, "l")    // returns array of positions (limitation)
@@ -208,6 +228,7 @@ os.time()               // current timestamp
 os.exit(0)              // exit program
 os.getenv("HOME")       // env var
 os.system("ls -la")     // shell command
+os.sleep(500)           // sleep milliseconds (great for animation loops)
 ```
 
 ### IO (file operations)
@@ -233,6 +254,54 @@ to_float(5)             // 5.0
 to_string(42)           // "42"
 to_int_str("123")       // 123
 ```
+
+### Keyboard Input
+
+`input_key()` reads a single keypress in raw mode (no Enter required) and
+returns an `int64_t`. Arrow keys are decoded to small codes; every other key
+returns its raw ASCII value.
+
+```fred
+let k = input_key()
+// Arrow keys:   1 = up, 2 = down, 3 = right, 4 = left
+// Any other key: its ASCII code, e.g. 'q' = 113, 'w' = 119, ' ' = 32
+
+if (k == 1 or k == 119) { print("up") }      // up arrow or 'w'
+if (k == 113)           { print("quit") }    // 'q'
+```
+
+It uses `termios` raw mode internally and restores the terminal afterward, so
+it's safe to call repeatedly in a game loop. Pair it with `os.system("clear")`
+to build interactive terminal programs (see `examples/13_snake_game.fred`).
+
+`read_line()` reads a whole line from stdin (Enter required, newline stripped)
+and returns a `String`. Combine with `to_int_str()` for numeric input.
+
+```fred
+print("Enter a number: ")
+let line = read_line()
+let n = to_int_str(line)
+print(`Doubled: ${n * 2}`)
+```
+
+See `examples/12_number_guessing_game.fred` for a full read_line() example.
+
+> `input_key()` and `read_line()` are available in `.fred`, `.lua`, and `.js`
+> sources — they're compiler builtins, not a library, so they work regardless
+> of input language.
+
+### nuke() — the .fred-only kill switch
+
+```fred
+nuke()   // immediately hard-crashes the program (SIGABRT, exit 134)
+```
+
+`nuke()` is a deliberate self-destruct: it prints `*** FRED NUKE DETONATED ***`
+to stderr and calls `abort()`. This is **not** a graceful exit like `os.exit()` —
+it crashes the process outright (core dump, non-zero signal).
+
+It is **`.fred`-only**: using `nuke()` in a `.lua` or `.js` source is a
+compile-time error. Only genuine `.fred` files (and the REPL) may detonate it.
 
 ---
 

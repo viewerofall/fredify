@@ -47,11 +47,15 @@ fn main() {
                 continue;
             }
             _ if !args[i].starts_with('-') => {
-                input_path = &args[i];
-                if output_dir.is_none() && i + 1 < args.len() && !args[i + 1].starts_with('-') {
-                    output_name = Some(args[i + 1].clone());
+                if input_path.is_empty() {
+                    input_path = &args[i];
+                    // Only set output_name from next arg if no -o was given
+                    if output_dir.is_none() && i + 1 < args.len() && !args[i + 1].starts_with('-') {
+                        output_name = Some(args[i + 1].clone());
+                        i += 2;
+                        continue;
+                    }
                 }
-                break;
             }
             _ => {}
         }
@@ -140,6 +144,7 @@ fn main() {
 
     // Validate
     let mut validator = validator::Validator::new();
+    validator.set_allow_nuke(input_path.ends_with(".fred"));
     if let Err(errors) = validator.validate(&ast) {
         eprintln!("Validation errors:");
         for err in errors {
@@ -171,15 +176,29 @@ fn main() {
 
     println!("Generated: {}", c_file);
 
+    // Determine output executable path
+    let exe_path = match &output_dir {
+        Some(dir) => format!("{}/{}", dir, output_name),
+        None => output_name.clone(),
+    };
+
+    // Create output directory if needed
+    if let Some(dir) = &output_dir {
+        if let Err(e) = fs::create_dir_all(dir) {
+            eprintln!("Error creating output directory {}: {}", dir, e);
+            std::process::exit(1);
+        }
+    }
+
     // Compile with gcc
     let output = Command::new("gcc")
-        .args(&["-o", &output_name, &c_file, "-lm"])
+        .args(&["-o", &exe_path, &c_file, "-lm"])
         .output();
 
     match output {
         Ok(out) => {
             if out.status.success() {
-                println!("✓ Compiled: {} → {}", input_path, output_name);
+                println!("✓ Compiled: {} → {}", input_path, exe_path);
             } else {
                 eprintln!("GCC compilation failed:");
                 eprintln!("{}", String::from_utf8_lossy(&out.stderr));
@@ -304,6 +323,7 @@ fn compile_single_file(input_file: &str, output_name: &str, stop_at: &str) -> bo
 
     // Validate
     let mut validator = validator::Validator::new();
+    validator.set_allow_nuke(input_file.ends_with(".fred"));
     if let Err(errors) = validator.validate(&ast) {
         eprintln!("✗ Validation errors in {}:", input_file);
         for err in errors {
@@ -464,6 +484,7 @@ fn execute_statement(code: &str, counter: usize) -> bool {
 
     // Validate
     let mut validator = validator::Validator::new();
+    validator.set_allow_nuke(true); // REPL is .fred
     if let Err(errors) = validator.validate(&ast) {
         eprintln!("✗ Validation errors:");
         for err in errors {
@@ -518,8 +539,19 @@ fn execute_statement(code: &str, counter: usize) -> bool {
             if !stdout.is_empty() {
                 print!("{}", stdout);
             }
+            // Surface the program's stderr (e.g. the nuke banner)
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if !stderr.is_empty() {
+                eprint!("{}", stderr);
+            }
             if !out.status.success() {
-                eprintln!("✗ Execution failed");
+                // Distinguish a deliberate nuke (SIGABRT) from a generic failure
+                use std::os::unix::process::ExitStatusExt;
+                if out.status.signal() == Some(6) {
+                    eprintln!("💥 nuke() detonated — the program crashed (the REPL survives).");
+                } else {
+                    eprintln!("✗ Execution failed");
+                }
                 success = false;
             }
         }

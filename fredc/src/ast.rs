@@ -13,6 +13,11 @@ pub enum Stmt {
         target: String,
         value: Expr,
     },
+    AssignIndex {
+        obj: Expr,
+        index: Expr,
+        value: Expr,
+    },
     If {
         cond: Expr,
         then_body: Vec<Stmt>,

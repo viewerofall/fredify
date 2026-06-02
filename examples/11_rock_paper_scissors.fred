@@ -1,69 +1,81 @@
-// Game: Rock Paper Scissors simulator
-// Demonstrates: Game logic, control flow, random choices
+// Game: Rock Paper Scissors - interactive
+// Demonstrates: input_key() raw input, random CPU, score tracking
+//
+// Controls: r = rock, p = paper, s = scissors, q = quit
 
-fn play_round(round_num) {
-    print(`--- Round ${round_num} ---`)
-
-    // Seed-based pseudo-random choice
-    let seed = os.time() + round_num
-    let computer_choice = seed % 3  // 0=rock, 1=paper, 2=scissors
-
-    // Simulate player choice (rotate through)
-    let player_choice = round_num % 3
-
-    let computer_str = "rock"
-    if (computer_choice == 1) {
-        computer_str = "paper"
+fn name_of(choice) {
+    let s = "rock"
+    if (choice == 1) {
+        s = "paper"
     }
-    if (computer_choice == 2) {
-        computer_str = "scissors"
+    if (choice == 2) {
+        s = "scissors"
     }
+    return s
+}
 
-    let player_str = "rock"
-    if (player_choice == 1) {
-        player_str = "paper"
-    }
-    if (player_choice == 2) {
-        player_str = "scissors"
-    }
+fn play_rps() {
+    let wins = 0
+    let losses = 0
+    let ties = 0
+    let playing = 1
 
-    print(`Player: ${player_str}`)
-    print(`Computer: ${computer_str}`)
+    print("=== ROCK PAPER SCISSORS ===")
+    print("r = rock, p = paper, s = scissors, q = quit")
+    print("")
 
-    // Determine winner
-    if (player_choice == computer_choice) {
-        print("Result: TIE")
-    } else {
-        if (player_choice == 0) {
-            if (computer_choice == 2) {
-                print("Result: Player wins")
-            } else {
-                print("Result: Computer wins")
+    while (playing == 1) {
+        print("Your move? (r/p/s, q to quit): ")
+        let key = input_key()
+
+        let player = -1
+        if (key == 114) {
+            player = 0
+        }
+        if (key == 112) {
+            player = 1
+        }
+        if (key == 115) {
+            player = 2
+        }
+        if (key == 113) {
+            playing = 0
+        }
+
+        if (playing == 1 and player == -1) {
+            print("Invalid key - press r, p, s, or q")
+            print("")
+        }
+
+        if (playing == 1 and player != -1) {
+            let cpu = (Math.random()) % 3
+
+            print(`You: ${name_of(player)}   CPU: ${name_of(cpu)}`)
+
+            // result: player beats (player+1)%3... rock(0)>scissors(2), paper(1)>rock(0), scissors(2)>paper(1)
+            let result = (3 + player - cpu) % 3
+            // result 0 = tie, 1 = player wins, 2 = cpu wins
+            if (result == 0) {
+                ties = ties + 1
+                print("=> TIE")
             }
-        } else {
-            if (player_choice == 1) {
-                if (computer_choice == 0) {
-                    print("Result: Player wins")
-                } else {
-                    print("Result: Computer wins")
-                }
-            } else {
-                if (computer_choice == 1) {
-                    print("Result: Player wins")
-                } else {
-                    print("Result: Computer wins")
-                }
+            if (result == 1) {
+                wins = wins + 1
+                print("=> YOU WIN")
             }
+            if (result == 2) {
+                losses = losses + 1
+                print("=> CPU WINS")
+            }
+            print(`Score - Wins: ${wins}  Losses: ${losses}  Ties: ${ties}`)
+            print("")
         }
     }
+
     print("")
+    print("=== FINAL SCORE ===")
+    print(`Wins: ${wins}  Losses: ${losses}  Ties: ${ties}`)
+    print("Thanks for playing!")
 }
 
-print("=== Rock Paper Scissors Game ===")
-print("")
-
-loop round from 1 to 5 {
-    play_round(round)
-}
-
-print("Game complete!")
+play_rps()

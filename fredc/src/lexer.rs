@@ -32,6 +32,10 @@ pub enum Token {
     Star,
     Slash,
     Percent,
+    PlusEqual,
+    MinusEqual,
+    StarEqual,
+    SlashEqual,
     Equal,
     EqualEqual,
     NotEqual,
@@ -272,19 +276,23 @@ impl Lexer {
             Some('`') => self.read_template_string(),
             Some('+') => {
                 self.advance();
-                Ok(Token::Plus)
+                if self.peek() == Some('=') { self.advance(); Ok(Token::PlusEqual) }
+                else { Ok(Token::Plus) }
             }
             Some('-') => {
                 self.advance();
-                Ok(Token::Minus)
+                if self.peek() == Some('=') { self.advance(); Ok(Token::MinusEqual) }
+                else { Ok(Token::Minus) }
             }
             Some('*') => {
                 self.advance();
-                Ok(Token::Star)
+                if self.peek() == Some('=') { self.advance(); Ok(Token::StarEqual) }
+                else { Ok(Token::Star) }
             }
             Some('/') => {
                 self.advance();
-                Ok(Token::Slash)
+                if self.peek() == Some('=') { self.advance(); Ok(Token::SlashEqual) }
+                else { Ok(Token::Slash) }
             }
             Some('%') => {
                 self.advance();

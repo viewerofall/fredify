@@ -30,12 +30,12 @@ install-node-deps:
 
 build: check-deps
 	@echo "Building fredc..."
-	@cd fredc && cargo build --release 2>&1 | grep -E "Finished|error" && cd ..
+	@cd fredc && cargo build --release
 	@echo "✓ fredc built"
 
 install: build install-node-deps
 	@mkdir -p $(INSTALL_PREFIX) $(HOME)/.local/share/fredify
-	@cp $(FREDC_BINARY) $(INSTALL_PREFIX)/fredc-bin
+	@cp $(FREDC_BINARY) $(INSTALL_PREFIX)/fredc-bin.tmp && mv -f $(INSTALL_PREFIX)/fredc-bin.tmp $(INSTALL_PREFIX)/fredc-bin
 	@cp -r castl-js $(HOME)/.local/share/fredify/
 	@echo '#!/bin/bash' > /tmp/fred_wrapper.sh
 	@echo 'FREDC="$$(dirname "$$0")/fredc-bin"' >> /tmp/fred_wrapper.sh

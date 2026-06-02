@@ -4,6 +4,12 @@ use std::collections::HashMap;
 pub fn generate_c(stmts: &[Stmt]) -> String {
     let mut gen = CGen::new();
 
+    // Add header comment about compilation
+    gen.output.push_str("/* Generated C code from .fred compiler\n");
+    gen.output.push_str(" * Compile with: gcc -o output thisfile.c -lm\n");
+    gen.output.push_str(" * The -lm flag links libmath (required for Math.* functions)\n");
+    gen.output.push_str(" */\n\n");
+
     // Generate array struct and helper functions
     gen.emit_array_structs();
     gen.emit_array_helpers();
@@ -16,6 +22,17 @@ pub fn generate_c(stmts: &[Stmt]) -> String {
         match stmt {
             Stmt::FnDef { .. } => fn_defs.push(stmt),
             _ => other_stmts.push(stmt),
+        }
+    }
+
+    // Pre-pass: infer each function's return type so calls + signatures agree.
+    // Iterate twice so functions that call later-defined functions still resolve.
+    for _ in 0..2 {
+        for stmt in &fn_defs {
+            if let Stmt::FnDef { name, params, body } = stmt {
+                let ret = gen.infer_fn_return_type(params, body);
+                gen.fn_types.insert(name.clone(), ret);
+            }
         }
     }
 
@@ -43,6 +60,7 @@ pub fn generate_c(stmts: &[Stmt]) -> String {
 
     // Generate main function with other statements
     gen.output.push_str("int main() {\n");
+    gen.output.push_str("  srand((unsigned)time(NULL));\n");
     gen.indent = 1;
     for stmt in other_stmts {
         gen.gen_stmt(stmt);
@@ -61,17 +79,83 @@ struct CGen {
     indent: usize,
     closure_counter: usize,
     var_types: HashMap<String, String>,
+    fn_types: HashMap<String, String>,
 }
 
 impl CGen {
     fn new() -> Self {
         CGen {
-            output: String::from("#include <stdio.h>\n#include <stdint.h>\n#include <stdlib.h>\n#include <string.h>\n\n"),
+            output: String::from("#include <stdio.h>\n#include <stdint.h>\n#include <stdlib.h>\n#include <string.h>\n#include <termios.h>\n#include <unistd.h>\n\n"),
             closures: String::new(),
             indent: 0,
             closure_counter: 0,
             var_types: HashMap::new(),
+            fn_types: HashMap::new(),
         }
+    }
+
+    // Infer a function's C return type by scanning its return statements.
+    // Returns "String", "Array", or "int64_t".
+    fn infer_fn_return_type(&self, params: &[String], body: &[Stmt]) -> String {
+        // Treat params as int64_t for the purpose of this scan (they always are).
+        let mut probe = CGen {
+            output: String::new(),
+            closures: String::new(),
+            indent: 0,
+            closure_counter: 0,
+            var_types: HashMap::new(),
+            fn_types: self.fn_types.clone(),
+        };
+        for p in params {
+            probe.var_types.insert(p.clone(), "int64_t".to_string());
+        }
+        probe.scan_returns_for_type(body)
+    }
+
+    fn scan_returns_for_type(&mut self, body: &[Stmt]) -> String {
+        for stmt in body {
+            // Track locals so return of a local var resolves correctly.
+            if let Stmt::Let { name, value: Some(v) } = stmt {
+                if self.expr_returns_string(v) {
+                    self.var_types.insert(name.clone(), "String".to_string());
+                } else if self.expr_returns_array(v) {
+                    self.var_types.insert(name.clone(), "Array".to_string());
+                } else {
+                    self.var_types.insert(name.clone(), "int64_t".to_string());
+                }
+            }
+            let found = match stmt {
+                Stmt::Return(Some(e)) => {
+                    if self.expr_returns_string(e) {
+                        Some("String".to_string())
+                    } else if self.expr_returns_array(e) {
+                        Some("Array".to_string())
+                    } else {
+                        None
+                    }
+                }
+                Stmt::If { then_body, else_body, .. } => {
+                    let t = self.scan_returns_for_type(then_body);
+                    if t != "int64_t" {
+                        Some(t)
+                    } else if let Some(eb) = else_body {
+                        let e = self.scan_returns_for_type(eb);
+                        if e != "int64_t" { Some(e) } else { None }
+                    } else {
+                        None
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::Loop { body, .. } | Stmt::ForIn { body, .. } => {
+                    let t = self.scan_returns_for_type(body);
+                    if t != "int64_t" { Some(t) } else { None }
+                }
+                _ => None,
+            };
+            if let Some(ty) = found {
+                return ty;
+            }
+        }
+        "int64_t".to_string()
     }
 
     fn emit_array_structs(&mut self) {
@@ -158,6 +242,40 @@ impl CGen {
         self.output.push_str("int64_t math_min(int64_t a, int64_t b) { return (a < b) ? a : b; }\n");
         self.output.push_str("int64_t math_random() { return rand() % 1000000; }\n\n");
 
+        // Raw keyboard input: returns 1=up 2=down 3=right 4=left for arrow keys,
+        // otherwise the raw ASCII code of the key pressed (e.g. 'q'=113, 'w'=119).
+        self.output.push_str("int64_t input_key() {\n");
+        self.output.push_str("  struct termios old, raw;\n");
+        self.output.push_str("  if (tcgetattr(STDIN_FILENO, &old) != 0) return getchar();\n");
+        self.output.push_str("  raw = old;\n");
+        self.output.push_str("  raw.c_lflag &= ~(ICANON | ECHO);\n");
+        self.output.push_str("  raw.c_cc[VMIN] = 1; raw.c_cc[VTIME] = 0;\n");
+        self.output.push_str("  tcsetattr(STDIN_FILENO, TCSANOW, &raw);\n");
+        self.output.push_str("  int c = getchar();\n");
+        self.output.push_str("  int64_t key = c;\n");
+        self.output.push_str("  if (c == 27) {\n");
+        self.output.push_str("    if (getchar() == '[') {\n");
+        self.output.push_str("      switch (getchar()) {\n");
+        self.output.push_str("        case 'A': key = 1; break;\n");
+        self.output.push_str("        case 'B': key = 2; break;\n");
+        self.output.push_str("        case 'C': key = 3; break;\n");
+        self.output.push_str("        case 'D': key = 4; break;\n");
+        self.output.push_str("      }\n");
+        self.output.push_str("    }\n");
+        self.output.push_str("  }\n");
+        self.output.push_str("  tcsetattr(STDIN_FILENO, TCSANOW, &old);\n");
+        self.output.push_str("  return key;\n");
+        self.output.push_str("}\n\n");
+
+        // Read a full line from stdin (newline stripped) as a String.
+        self.output.push_str("String read_line() {\n");
+        self.output.push_str("  char buf[1024];\n");
+        self.output.push_str("  if (!fgets(buf, sizeof(buf), stdin)) { String s; s.len = 0; s.data = malloc(1); s.data[0] = '\\0'; return s; }\n");
+        self.output.push_str("  size_t n = strlen(buf);\n");
+        self.output.push_str("  if (n > 0 && buf[n-1] == '\\n') buf[n-1] = '\\0';\n");
+        self.output.push_str("  return string_new_literal(buf);\n");
+        self.output.push_str("}\n\n");
+
         // Type conversion functions
         self.output.push_str("int64_t to_int(double x) { return (int64_t)x; }\n");
         self.output.push_str("double to_float(int64_t x) { return (double)x; }\n");
@@ -200,6 +318,34 @@ impl CGen {
         self.output.push_str("  return result;\n");
         self.output.push_str("}\n\n");
 
+        // Trim leading/trailing ASCII whitespace
+        self.output.push_str("String string_trim(String s) {\n");
+        self.output.push_str("  int64_t start = 0; int64_t end = s.len;\n");
+        self.output.push_str("  while (start < end && (s.data[start]==' '||s.data[start]=='\\t'||s.data[start]=='\\n'||s.data[start]=='\\r')) start++;\n");
+        self.output.push_str("  while (end > start && (s.data[end-1]==' '||s.data[end-1]=='\\t'||s.data[end-1]=='\\n'||s.data[end-1]=='\\r')) end--;\n");
+        self.output.push_str("  return string_substring(s, start, end);\n");
+        self.output.push_str("}\n\n");
+
+        // Return a one-char String at index (empty if out of range)
+        self.output.push_str("String string_char_at(String s, int64_t idx) {\n");
+        self.output.push_str("  if (idx < 0 || idx >= s.len) { String e; e.len=0; e.data=malloc(1); e.data[0]='\\0'; return e; }\n");
+        self.output.push_str("  return string_substring(s, idx, idx + 1);\n");
+        self.output.push_str("}\n\n");
+
+        // Replace all occurrences of `from` with `to`
+        self.output.push_str("String string_replace(String s, String from, String to) {\n");
+        self.output.push_str("  if (from.len == 0) return s;\n");
+        self.output.push_str("  char* out = malloc(s.len * (to.len > 1 ? to.len : 1) + s.len + 1);\n");
+        self.output.push_str("  int64_t oi = 0; int64_t i = 0;\n");
+        self.output.push_str("  while (i < s.len) {\n");
+        self.output.push_str("    if (i + from.len <= s.len && strncmp(s.data + i, from.data, from.len) == 0) {\n");
+        self.output.push_str("      memcpy(out + oi, to.data, to.len); oi += to.len; i += from.len;\n");
+        self.output.push_str("    } else { out[oi++] = s.data[i++]; }\n");
+        self.output.push_str("  }\n");
+        self.output.push_str("  out[oi] = '\\0';\n");
+        self.output.push_str("  String r = string_new_literal(out); free(out); return r;\n");
+        self.output.push_str("}\n\n");
+
         // Table operations
         self.output.push_str("void table_insert(Array* t, int64_t val) { array_push(t, val); }\n");
         self.output.push_str("int64_t table_remove(Array* t) { return array_pop(t); }\n");
@@ -234,7 +380,11 @@ impl CGen {
         self.output.push_str("  if (val) return string_new_literal(val);\n");
         self.output.push_str("  String s; s.len = 0; s.data = malloc(1); s.data[0] = '\\0'; return s;\n");
         self.output.push_str("}\n");
-        self.output.push_str("int64_t os_system(String cmd) { return system(cmd.data); }\n\n");
+        self.output.push_str("int64_t os_system(String cmd) { return system(cmd.data); }\n");
+        self.output.push_str("void os_sleep(int64_t ms) { usleep((useconds_t)(ms * 1000)); }\n\n");
+
+        // nuke: .fred-only hard crash (SIGABRT). Gated in the validator.
+        self.output.push_str("int64_t fred_nuke() { fprintf(stderr, \"\\n*** FRED NUKE DETONATED ***\\n\"); abort(); return 0; }\n\n");
 
         // IO operations
         self.output.push_str("typedef void* FileHandle;\n");
@@ -331,13 +481,20 @@ impl CGen {
                         .collect::<Vec<_>>()
                         .join(", ")
                 };
-                self.output.push_str(&format!("int64_t {}({}) {{\n", safe_name, params_str));
+                let ret_type = self.fn_types.get(name).cloned().unwrap_or_else(|| "int64_t".to_string());
+                // Params are int64_t; register them so the body generates correctly.
+                let saved_types = self.var_types.clone();
+                for p in params {
+                    self.var_types.insert(p.clone(), "int64_t".to_string());
+                }
+                self.output.push_str(&format!("{} {}({}) {{\n", ret_type, safe_name, params_str));
                 self.indent += 1;
                 for stmt in body {
                     self.gen_stmt(stmt);
                 }
                 self.indent -= 1;
                 self.output.push_str("}\n\n");
+                self.var_types = saved_types;
             }
             Stmt::Let { name, value } => {
                 if let Some(val) = value {
@@ -370,6 +527,12 @@ impl CGen {
             Stmt::Assign { target, value } => {
                 let expr = self.gen_expr(value);
                 self.emit(&format!("{} = {};", target, expr));
+            }
+            Stmt::AssignIndex { obj, index, value } => {
+                let obj_str = self.gen_expr(obj);
+                let idx_str = self.gen_expr(index);
+                let val_str = self.gen_expr(value);
+                self.emit(&format!("array_set(&{}, {}, {});", obj_str, idx_str, val_str));
             }
             Stmt::If {
                 cond,
@@ -556,6 +719,10 @@ impl CGen {
                         let args_str = arg_values.join(", ");
                         return format!("printf(\"{}\", {})", format_str, args_str);
                     }
+                    // nuke: .fred-only hard crash
+                    if name == "nuke" {
+                        return "fred_nuke()".to_string();
+                    }
                     // Type conversion functions
                     match name.as_str() {
                         "to_int" | "to_float" | "to_int_str" | "string_length" => {
@@ -572,8 +739,8 @@ impl CGen {
                 let obj_type = if matches!(obj.as_ref(), Expr::String(_)) {
                     "String".to_string()
                 } else if let Expr::MethodCall { method: m, .. } = obj.as_ref() {
-                    // Check if the method call returns a string
-                    if matches!(m.as_str(), "uppercase" | "lowercase" | "substring") {
+                    // Check if the inner method call returns a string
+                    if matches!(m.as_str(), "uppercase" | "lowercase" | "substring" | "trim" | "char_at" | "replace") {
                         "String".to_string()
                     } else {
                         "Array".to_string()
@@ -647,6 +814,10 @@ impl CGen {
                             let cmd = self.gen_expr(&args[0]);
                             format!("os_system({})", cmd)
                         }
+                        "sleep" => {
+                            let ms = self.gen_expr(&args[0]);
+                            format!("(os_sleep({}), 0)", ms)
+                        }
                         _ => "0".to_string(),
                     };
                 }
@@ -687,6 +858,24 @@ impl CGen {
                                 let start = self.gen_expr(&args[0]);
                                 let end = self.gen_expr(&args[1]);
                                 format!("string_substring({}, {}, {})", obj_expr, start, end)
+                            } else {
+                                "0".to_string()
+                            }
+                        }
+                        "trim" => format!("string_trim({})", obj_expr),
+                        "char_at" => {
+                            if args.len() == 1 {
+                                let idx = self.gen_expr(&args[0]);
+                                format!("string_char_at({}, {})", obj_expr, idx)
+                            } else {
+                                "0".to_string()
+                            }
+                        }
+                        "replace" => {
+                            if args.len() == 2 {
+                                let from = self.gen_expr(&args[0]);
+                                let to = self.gen_expr(&args[1]);
+                                format!("string_replace({}, {}, {})", obj_expr, from, to)
                             } else {
                                 "0".to_string()
                             }
@@ -884,12 +1073,14 @@ impl CGen {
                     "io" => matches!(method.as_str(), "read"),
                     "table" => matches!(method.as_str(), "concat"),
                     "string" => matches!(method.as_str(), "split") == false && matches!(method.as_str(), "find") == false,
-                    _ => matches!(method.as_str(), "uppercase" | "lowercase" | "substring" | "join"),
+                    _ => matches!(method.as_str(), "uppercase" | "lowercase" | "substring" | "join" | "trim" | "char_at" | "replace"),
                 }
             }
             Expr::Call { func, .. } => {
                 if let Expr::Id(name) = func.as_ref() {
-                    matches!(name.as_str(), "to_string")
+                    name == "to_string"
+                        || name == "read_line"
+                        || self.fn_types.get(name).map(|t| t == "String").unwrap_or(false)
                 } else {
                     false
                 }
@@ -905,6 +1096,13 @@ impl CGen {
         match expr {
             Expr::Array(_) => true,
             Expr::Id(name) => self.var_types.get(name).map(|t| t == "Array").unwrap_or(false),
+            Expr::Call { func, .. } => {
+                if let Expr::Id(name) = func.as_ref() {
+                    self.fn_types.get(name).map(|t| t == "Array").unwrap_or(false)
+                } else {
+                    false
+                }
+            }
             Expr::MethodCall { obj, method, .. } => {
                 let obj_str = self.expr_to_string(obj);
                 match obj_str.as_str() {
@@ -926,6 +1124,11 @@ impl CGen {
         match stmt {
             Stmt::Let { value: Some(val), .. } => self.scan_expr_for_closures(val),
             Stmt::Assign { value, .. } => self.scan_expr_for_closures(value),
+            Stmt::AssignIndex { obj, index, value } => {
+                self.scan_expr_for_closures(obj);
+                self.scan_expr_for_closures(index);
+                self.scan_expr_for_closures(value);
+            }
             Stmt::If { cond, then_body, else_body, .. } => {
                 self.scan_expr_for_closures(cond);
                 for s in then_body {

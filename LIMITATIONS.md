@@ -156,22 +156,23 @@ In C, you can't declare the same variable twice. Prevents accidental shadowing.
 **What doesn't work:**
 ```fred
 let s = "hello"
-print(s[0])              // ✗ No indexing
+print(s[0])              // ✗ No bracket indexing (use s.char_at(0))
 print(s.chars())         // ✗ Not supported
-print(s.replace("l", "L"))  // ✗ Not supported
-print(s.trim())          // ✗ Not supported
 ```
 
 **Available string methods:**
 - `.length()` - Get length
 - `.uppercase()` / `.lowercase()` - Case conversion
 - `.substring(start, end)` - Extract substring
+- `.trim()` - Strip leading/trailing whitespace
+- `.char_at(i)` - One-char String at index
+- `.replace(from, to)` - Replace all occurrences
 - `string.find(str, pattern)` - Find substring
 - `string.split(str, sep)` - Split by separator
 - `+` operator - Concatenation
 
 **Workaround:**
-- For character access: Use `string.split()` to break into parts
+- For character access: use `s.char_at(i)` (bracket `s[i]` indexing is not supported)
 - For complex parsing: Use Lua or JavaScript and compile to .fred
 
 ---

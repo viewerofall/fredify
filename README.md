@@ -31,6 +31,9 @@ No runtime. No garbage collector. Just C under the hood.
 - `.length()` - Get length
 - `.uppercase()`, `.lowercase()` - Case conversion
 - `.substring(start, end)` - Extract substring
+- `.trim()` - Strip leading/trailing whitespace
+- `.char_at(i)` - One-char String at index
+- `.replace(from, to)` - Replace all occurrences
 - `string.find(str, pattern)` - Search
 - `string.split(str, sep)` - Parse into array
 - Concatenation with `+` operator
@@ -39,13 +42,19 @@ No runtime. No garbage collector. Just C under the hood.
 
 **Math**: `Math.abs()`, `Math.sqrt()`, `Math.pow()`, `Math.max()`, `Math.min()`, `Math.floor()`, `Math.ceil()`, `Math.round()`, `Math.random()`
 
-**OS**: `os.time()`, `os.exit(code)`, `os.getenv(name)`, `os.system(cmd)`
+**OS**: `os.time()`, `os.exit(code)`, `os.getenv(name)`, `os.system(cmd)`, `os.sleep(ms)`
 
 **IO**: `io.open(file, mode)`, `io.close(handle)`, `io.read(handle)`, `io.write(handle, data)`
 
 **Table**: `table.insert(arr, val)`, `table.remove(arr)`, `table.concat(arr, sep)`, `table.sort(arr)`
 
 **Type Conversion**: `to_int()`, `to_float()`, `to_string()`, `to_int_str()`
+
+**Keyboard Input**:
+- `input_key()` — reads a single raw keypress (no Enter). Arrow keys → `1`/`2`/`3`/`4` (up/down/right/left), any other key → its ASCII code. See `examples/13_snake_game.fred`.
+- `read_line()` — reads a full line from stdin (Enter required) as a `String`; pair with `to_int_str()` for numbers. See `examples/12_number_guessing_game.fred`.
+
+Both are compiler builtins, so they work in `.fred`/`.lua`/`.js`.
 
 ### Control Flow
 - `if/else` statements
@@ -55,6 +64,9 @@ No runtime. No garbage collector. Just C under the hood.
 - `break` statement (exit loops early)
 - `switch/case/default` statements
 - Ternary operator: `condition ? true_value : false_value`
+- Array element assignment: `arr[i] = x`
+- Compound assignment: `+=`, `-=`, `*=`, `/=` (variables and array elements)
+- `nuke()` — `.fred`-only hard-crash kill switch (rejected in `.lua`/`.js`)
 - Function definitions with closures
 - Lexical scoping with closure capture
 
@@ -156,7 +168,7 @@ fred> exit
 
 ### Examples
 
-See `examples/` directory for 13 working demonstrations:
+See `examples/` directory for 14 working demonstrations:
 1. `01_hello_world.fred` - Basic output
 2. `02_arrays_and_closures.fred` - Functional programming
 3. `03_strings.fred` - String manipulation
@@ -167,9 +179,10 @@ See `examples/` directory for 13 working demonstrations:
 8. `08_for_in_loops.fred` - For-in iteration
 9. `09_switch_statements.fred` - Switch/case control flow
 10. `10_string_interpolation.fred` - Template strings with `${}`
-11. `11_rock_paper_scissors.fred` - Interactive game with break + ternary
-12. `12_number_guessing_game.fred` - Multi-round game with random numbers
-13. `13_snake_game.fred` - Animated game with AI pathfinding
+11. `11_rock_paper_scissors.fred` - Interactive game: `input_key()` + random CPU
+12. `12_number_guessing_game.fred` - Interactive game: `read_line()` numeric input
+13. `13_snake_game.fred` - Interactive snake with real arrow-key/WASD input (`input_key()`)
+14. `14_new_features.fred` - `arr[i]=`, compound assignment, string methods, `os.sleep`, `nuke()`
 
 ## Architecture
 

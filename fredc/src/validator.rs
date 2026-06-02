@@ -4,6 +4,7 @@ use std::collections::HashSet;
 pub struct Validator {
     defined_vars: HashSet<String>,
     errors: Vec<String>,
+    allow_nuke: bool,
 }
 
 impl Validator {
@@ -11,7 +12,13 @@ impl Validator {
         Validator {
             defined_vars: HashSet::new(),
             errors: Vec::new(),
+            allow_nuke: false,
         }
+    }
+
+    // nuke() is only permitted in genuine .fred sources, not .lua/.js inputs.
+    pub fn set_allow_nuke(&mut self, allow: bool) {
+        self.allow_nuke = allow;
     }
 
     pub fn validate(&mut self, stmts: &[Stmt]) -> Result<(), Vec<String>> {
@@ -48,6 +55,11 @@ impl Validator {
                 if !self.defined_vars.contains(target) {
                     self.errors.push(format!("Undefined variable: '{}'", target));
                 }
+                self.validate_expr(value);
+            }
+            Stmt::AssignIndex { obj, index, value } => {
+                self.validate_expr(obj);
+                self.validate_expr(index);
                 self.validate_expr(value);
             }
             Stmt::If { cond, then_body, else_body } => {
@@ -106,7 +118,7 @@ impl Validator {
     fn validate_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Id(name) => {
-                let builtins = vec!["Math", "table", "os", "io", "string", "print", "to_int", "to_float", "to_string", "to_int_str"];
+                let builtins = vec!["Math", "table", "os", "io", "string", "print", "to_int", "to_float", "to_string", "to_int_str", "input_key", "read_line", "nuke"];
                 if !self.defined_vars.contains(name) && !builtins.contains(&name.as_str()) {
                     self.errors.push(format!("Undefined variable: '{}'. Did you forget to declare it with 'let'?", name));
                 }
@@ -120,6 +132,13 @@ impl Validator {
             }
             Expr::UnOp { expr, .. } => self.validate_expr(expr),
             Expr::Call { func, args } => {
+                if let Expr::Id(name) = func.as_ref() {
+                    if name == "nuke" && !self.allow_nuke {
+                        self.errors.push(
+                            "'nuke' is a .fred-only call and cannot be used in .lua or .js sources".to_string(),
+                        );
+                    }
+                }
                 self.validate_expr(func);
                 for arg in args {
                     self.validate_expr(arg);
@@ -143,8 +162,8 @@ impl Validator {
                         }
                     }
                     Expr::Id(n) if n == "os" => {
-                        if !matches!(method.as_str(), "time" | "exit" | "getenv" | "system") {
-                            self.errors.push(format!("Unknown os method: '{}'. Available: time, exit, getenv, system", method));
+                        if !matches!(method.as_str(), "time" | "exit" | "getenv" | "system" | "sleep") {
+                            self.errors.push(format!("Unknown os method: '{}'. Available: time, exit, getenv, system, sleep", method));
                         }
                     }
                     Expr::Id(n) if n == "io" => {

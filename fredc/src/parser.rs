@@ -52,16 +52,34 @@ impl Parser {
             Token::Switch => self.parse_switch(),
             _ => {
                 let expr = self.parse_expr()?;
-                if self.peek() == &Token::Equal {
+                // Compound assignment operators desugar to `target = target <op> value`
+                let compound_op = match self.peek() {
+                    Token::PlusEqual => Some("+"),
+                    Token::MinusEqual => Some("-"),
+                    Token::StarEqual => Some("*"),
+                    Token::SlashEqual => Some("/"),
+                    _ => None,
+                };
+                if self.peek() == &Token::Equal || compound_op.is_some() {
                     self.advance();
-                    let value = self.parse_expr()?;
-                    if let Expr::Id(name) = expr {
-                        Ok(Stmt::Assign {
-                            target: name,
+                    let rhs = self.parse_expr()?;
+                    // Build the value: plain rhs, or (target <op> rhs) for compound forms
+                    let value = match compound_op {
+                        Some(op) => Expr::BinOp {
+                            left: Box::new(expr.clone()),
+                            op: op.to_string(),
+                            right: Box::new(rhs),
+                        },
+                        None => rhs,
+                    };
+                    match expr {
+                        Expr::Id(name) => Ok(Stmt::Assign { target: name, value }),
+                        Expr::Index { obj, index } => Ok(Stmt::AssignIndex {
+                            obj: *obj,
+                            index: *index,
                             value,
-                        })
-                    } else {
-                        Err("Can only assign to identifiers".to_string())
+                        }),
+                        _ => Err("Can only assign to identifiers or array elements".to_string()),
                     }
                 } else {
                     Ok(Stmt::Expr(expr))

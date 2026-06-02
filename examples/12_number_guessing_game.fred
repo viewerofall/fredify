@@ -1,54 +1,48 @@
-// Game: Number guessing game
-// Demonstrates: Closures, random numbers, game logic, loops
-
-fn play_round(secret, round) {
-    print(`--- Round ${round} ---`)
-
-    let found = 0
-    let guesses = 0
-
-    loop attempt from 1 to 10 {
-        guesses = guesses + 1
-
-        // Simulate guessing strategy that converges to secret
-        let diff = attempt - 5
-        let guess = secret + (diff / 2)
-
-        if (found == 0) {
-            if (guess == secret) {
-                print(`You found it! ${secret} in ${guesses} tries`)
-                found = 1
-            }
-            if (guess < secret) {
-                print(`Guess ${guesses}: ${guess} - Too low`)
-            }
-            if (guess > secret) {
-                print(`Guess ${guesses}: ${guess} - Too high`)
-            }
-
-            if (attempt >= 9 and found == 0) {
-                print(`Game over! Secret was ${secret}`)
-                found = 1
-            }
-        }
-    }
-    print("")
-}
+// Game: Number Guessing - interactive
+// Demonstrates: read_line() line input, to_int_str(), random target, loop + break
+//
+// The computer picks a secret 1-100. You type guesses; it tells you
+// higher or lower until you find it (or run out of tries).
 
 fn play_game() {
-    let seed = os.time()
+    let secret = (Math.random() % 100) + 1
+    let max_tries = 7
+    let tries = 0
+    let won = 0
 
-    // Generate 3 secrets for 3 rounds
-    let secret1 = (seed % 100) + 1
-    let secret2 = ((seed / 2) % 100) + 1
-    let secret3 = ((seed / 3) % 100) + 1
+    print("=== NUMBER GUESSING GAME ===")
+    print("I'm thinking of a number between 1 and 100.")
+    print(`You have ${max_tries} tries. Good luck!`)
+    print("")
 
-    play_round(secret1, 1)
-    play_round(secret2, 2)
-    play_round(secret3, 3)
+    while (tries < max_tries) {
+        print(`Try ${tries + 1}/${max_tries} - enter your guess: `)
+        let line = read_line()
+        let guess = to_int_str(line)
+
+        tries = tries + 1
+
+        if (guess == secret) {
+            print(`Correct! The number was ${secret}.`)
+            print(`You got it in ${tries} tries!`)
+            won = 1
+            break
+        }
+
+        if (guess < secret) {
+            print("Too low! Aim higher.")
+        } else {
+            print("Too high! Aim lower.")
+        }
+        print("")
+    }
+
+    if (won == 0) {
+        print("")
+        print(`Out of tries! The number was ${secret}.`)
+    }
+
+    print("Thanks for playing!")
 }
 
-print("=== Number Guessing Game ===")
-print("")
 play_game()
-print("Game complete!")
