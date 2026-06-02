@@ -1,0 +1,30 @@
+name: CI
+
+# Manual button (Actions tab → Run workflow) plus auto-run on push/PR to main.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: build + examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # gcc is preinstalled on ubuntu-latest (fred's only runtime dep besides cargo).
+      - name: Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fredc
+
+      # `make test` depends on `build` depends on `check-deps`, so this one
+      # target compiles fredc and then every example (.fred/.js/.lua).
+      - name: make test
+        run: make test
