@@ -1,0 +1,29 @@
+// Networking: HTTP GET/POST + polling
+// Demonstrates: http.get(url), http.post(url, body), os.sleep polling loop
+//
+// Requires `curl` on PATH (used internally). No JSON parsing here — we hit
+// plain-text endpoints so the response prints directly.
+
+print("=== Weather (HTTP GET) ===")
+// Arrays hold ints only, so fetch fixed cities directly:
+print(http.get("https://wttr.in/London?format=3"))
+print(http.get("https://wttr.in/Tokyo?format=3"))
+print(http.get("https://wttr.in/Cairo?format=3"))
+print("")
+
+print("=== Polling a value 3 times (2s apart) ===")
+loop i from 1 to 3 {
+    let now = http.get("https://wttr.in/?format=%t")
+    print(`poll ${i}: temp =${now}`)
+    os.sleep(2000)
+}
+print("")
+
+print("=== HTTP POST ===")
+let resp = http.post("https://httpbin.org/post", "lang=fred&awesome=1")
+// crude field extraction without a JSON parser:
+let idx = string.find(resp, "fred")
+print(`POST round-trip found 'fred' at byte ${idx}`)
+
+print("")
+print("Done!")

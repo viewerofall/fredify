@@ -239,6 +239,28 @@ io.write(file, "data")
 io.close(file)
 ```
 
+### HTTP (networking via curl)
+```fred
+let body = http.get("https://wttr.in/London?format=3")   // returns response as String
+print(body)
+
+let resp = http.post("https://httpbin.org/post", "key=value&n=1")
+
+// Download a URL straight to a file (returns 1 on success, 0 on failure)
+let ok = http.get_file("https://example.com/data.bin", "/tmp/data.bin")
+
+// Polling: combine with os.sleep
+loop i from 1 to 5 {
+    print(http.get("https://example.com/status"))
+    os.sleep(2000)   // every 2 seconds
+}
+```
+
+`http.get`/`http.post` shell out to `curl` (must be on PATH) and return the raw
+response body as a `String`. URLs and bodies are shell-escaped internally.
+There is no JSON parser yet — extract fields with `string.find` / `.substring`,
+or hit plain-text endpoints. See `examples/15_weather_http.fred`.
+
 ### Table (array utilities)
 ```fred
 table.insert(arr, 42)

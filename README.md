@@ -46,6 +46,8 @@ No runtime. No garbage collector. Just C under the hood.
 
 **IO**: `io.open(file, mode)`, `io.close(handle)`, `io.read(handle)`, `io.write(handle, data)`
 
+**HTTP** (via curl): `http.get(url)`, `http.post(url, body)` — returns response body as `String`; `http.get_file(url, path)` — downloads to a file (returns 1/0). No JSON parser yet; use `string.find`/`.substring` or plain-text endpoints. See `examples/15_weather_http.fred`.
+
 **Table**: `table.insert(arr, val)`, `table.remove(arr)`, `table.concat(arr, sep)`, `table.sort(arr)`
 
 **Type Conversion**: `to_int()`, `to_float()`, `to_string()`, `to_int_str()`
@@ -168,7 +170,7 @@ fred> exit
 
 ### Examples
 
-See `examples/` directory for 14 working demonstrations:
+See `examples/` directory for 15 working demonstrations:
 1. `01_hello_world.fred` - Basic output
 2. `02_arrays_and_closures.fred` - Functional programming
 3. `03_strings.fred` - String manipulation
@@ -183,6 +185,7 @@ See `examples/` directory for 14 working demonstrations:
 12. `12_number_guessing_game.fred` - Interactive game: `read_line()` numeric input
 13. `13_snake_game.fred` - Interactive snake with real arrow-key/WASD input (`input_key()`)
 14. `14_new_features.fred` - `arr[i]=`, compound assignment, string methods, `os.sleep`, `nuke()`
+15. `15_weather_http.fred` - Networking: `http.get`/`http.post` + polling loop
 
 ## Architecture
 

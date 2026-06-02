@@ -118,7 +118,7 @@ impl Validator {
     fn validate_expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Id(name) => {
-                let builtins = vec!["Math", "table", "os", "io", "string", "print", "to_int", "to_float", "to_string", "to_int_str", "input_key", "read_line", "nuke"];
+                let builtins = vec!["Math", "table", "os", "io", "http", "string", "print", "to_int", "to_float", "to_string", "to_int_str", "input_key", "read_line", "nuke"];
                 if !self.defined_vars.contains(name) && !builtins.contains(&name.as_str()) {
                     self.errors.push(format!("Undefined variable: '{}'. Did you forget to declare it with 'let'?", name));
                 }
@@ -164,6 +164,11 @@ impl Validator {
                     Expr::Id(n) if n == "os" => {
                         if !matches!(method.as_str(), "time" | "exit" | "getenv" | "system" | "sleep") {
                             self.errors.push(format!("Unknown os method: '{}'. Available: time, exit, getenv, system, sleep", method));
+                        }
+                    }
+                    Expr::Id(n) if n == "http" => {
+                        if !matches!(method.as_str(), "get" | "post" | "get_file") {
+                            self.errors.push(format!("Unknown http method: '{}'. Available: get, post, get_file", method));
                         }
                     }
                     Expr::Id(n) if n == "io" => {

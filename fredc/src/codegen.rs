@@ -276,6 +276,54 @@ impl CGen {
         self.output.push_str("  return string_new_literal(buf);\n");
         self.output.push_str("}\n\n");
 
+        // --- HTTP via curl (popen). No extra deps; curl must be on PATH. ---
+        // Wrap a string in single quotes, escaping embedded quotes (shell-safe).
+        self.output.push_str("char* http_sh_escape(const char* s) {\n");
+        self.output.push_str("  size_t len = strlen(s);\n");
+        self.output.push_str("  char* out = malloc(len * 4 + 3);\n");
+        self.output.push_str("  size_t o = 0; out[o++] = '\\'';\n");
+        self.output.push_str("  for (size_t i = 0; i < len; i++) {\n");
+        self.output.push_str("    if (s[i] == '\\'') { out[o++]='\\''; out[o++]='\\\\'; out[o++]='\\''; out[o++]='\\''; }\n");
+        self.output.push_str("    else out[o++] = s[i];\n");
+        self.output.push_str("  }\n");
+        self.output.push_str("  out[o++] = '\\''; out[o] = '\\0'; return out;\n");
+        self.output.push_str("}\n\n");
+
+        // Run a shell command and capture all stdout into a String.
+        self.output.push_str("String http_run(const char* cmd) {\n");
+        self.output.push_str("  FILE* p = popen(cmd, \"r\");\n");
+        self.output.push_str("  if (!p) { String s; s.len = 0; s.data = malloc(1); s.data[0] = '\\0'; return s; }\n");
+        self.output.push_str("  size_t cap = 4096, len = 0; char* buf = malloc(cap); size_t n;\n");
+        self.output.push_str("  while ((n = fread(buf + len, 1, cap - len, p)) > 0) {\n");
+        self.output.push_str("    len += n; if (len == cap) { cap *= 2; buf = realloc(buf, cap); }\n");
+        self.output.push_str("  }\n");
+        self.output.push_str("  pclose(p); buf[len] = '\\0';\n");
+        self.output.push_str("  String s = string_new_literal(buf); free(buf); return s;\n");
+        self.output.push_str("}\n\n");
+
+        self.output.push_str("String http_get(String url) {\n");
+        self.output.push_str("  char* eu = http_sh_escape(url.data);\n");
+        self.output.push_str("  size_t clen = strlen(eu) + 64; char* cmd = malloc(clen);\n");
+        self.output.push_str("  snprintf(cmd, clen, \"curl -s --max-time 20 %s\", eu);\n");
+        self.output.push_str("  String r = http_run(cmd); free(eu); free(cmd); return r;\n");
+        self.output.push_str("}\n\n");
+
+        self.output.push_str("String http_post(String url, String body) {\n");
+        self.output.push_str("  char* eu = http_sh_escape(url.data); char* eb = http_sh_escape(body.data);\n");
+        self.output.push_str("  size_t clen = strlen(eu) + strlen(eb) + 64; char* cmd = malloc(clen);\n");
+        self.output.push_str("  snprintf(cmd, clen, \"curl -s --max-time 20 -d %s %s\", eb, eu);\n");
+        self.output.push_str("  String r = http_run(cmd); free(eu); free(eb); free(cmd); return r;\n");
+        self.output.push_str("}\n\n");
+
+        // Download a URL to a file. Returns 1 on success, 0 on failure.
+        self.output.push_str("int64_t http_get_file(String url, String path) {\n");
+        self.output.push_str("  char* eu = http_sh_escape(url.data); char* ep = http_sh_escape(path.data);\n");
+        self.output.push_str("  size_t clen = strlen(eu) + strlen(ep) + 64; char* cmd = malloc(clen);\n");
+        self.output.push_str("  snprintf(cmd, clen, \"curl -s --max-time 60 -o %s %s\", ep, eu);\n");
+        self.output.push_str("  int rc = system(cmd); free(eu); free(ep); free(cmd);\n");
+        self.output.push_str("  return (rc == 0) ? 1 : 0;\n");
+        self.output.push_str("}\n\n");
+
         // Type conversion functions
         self.output.push_str("int64_t to_int(double x) { return (int64_t)x; }\n");
         self.output.push_str("double to_float(int64_t x) { return (double)x; }\n");
@@ -847,6 +895,27 @@ impl CGen {
                     };
                 }
 
+                // HTTP library handling (via curl)
+                if obj_str == "http" {
+                    return match method.as_str() {
+                        "get" => {
+                            let url = self.gen_expr(&args[0]);
+                            format!("http_get({})", url)
+                        }
+                        "post" => {
+                            let url = self.gen_expr(&args[0]);
+                            let body = self.gen_expr(&args[1]);
+                            format!("http_post({}, {})", url, body)
+                        }
+                        "get_file" => {
+                            let url = self.gen_expr(&args[0]);
+                            let path = self.gen_expr(&args[1]);
+                            format!("http_get_file({}, {})", url, path)
+                        }
+                        _ => "0".to_string(),
+                    };
+                }
+
                 // String methods handling
                 if obj_type == "String" {
                     return match method.as_str() {
@@ -1071,6 +1140,7 @@ impl CGen {
                 match obj_str.as_str() {
                     "os" => matches!(method.as_str(), "getenv"),
                     "io" => matches!(method.as_str(), "read"),
+                    "http" => matches!(method.as_str(), "get" | "post"),
                     "table" => matches!(method.as_str(), "concat"),
                     "string" => matches!(method.as_str(), "split") == false && matches!(method.as_str(), "find") == false,
                     _ => matches!(method.as_str(), "uppercase" | "lowercase" | "substring" | "join" | "trim" | "char_at" | "replace"),
