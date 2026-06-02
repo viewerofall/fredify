@@ -3,12 +3,14 @@ mod parser;
 mod ast;
 mod codegen;
 mod validator;
+mod js;
+mod lua;
 
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::io::{self, Write, BufRead};
+use std::io::{self, Write};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -86,32 +88,35 @@ fn main() {
             .to_string()
     });
 
-    // For .lua files with --to-lua, just output as-is
-    if stop_at == "lua" && input_path.ends_with(".lua") {
-        let content = match fs::read_to_string(input_path) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Error reading {}: {}", input_path, e);
-                std::process::exit(1);
-            }
-        };
-        let lua_file = format!("{}.lua", output_name);
-        if let Err(e) = fs::write(&lua_file, &content) {
-            eprintln!("Error writing {}: {}", lua_file, e);
-            std::process::exit(1);
-        }
-        println!("✓ Generated: {}", lua_file);
-        return;
-    }
-
     // Read file
-    let source = match fs::read_to_string(input_path) {
+    let raw = match fs::read_to_string(input_path) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Error reading {}: {}", input_path, e);
             std::process::exit(1);
         }
     };
+
+    // JavaScript and Lua inputs are transpiled to .fred source first (no node).
+    let transpiled = input_path.ends_with(".js") || input_path.ends_with(".lua");
+    let source = match to_fred_source(input_path, raw) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // --to-fred on a .js/.lua file shows the transpiled .fred source.
+    if stop_at == "fred" && transpiled {
+        let fred_file = format!("{}.fred", output_name);
+        if let Err(e) = fs::write(&fred_file, &source) {
+            eprintln!("Error writing .fred file: {}", e);
+            std::process::exit(1);
+        }
+        println!("✓ Generated: {}", fred_file);
+        return;
+    }
 
     // Tokenize
     let tokens = match lexer::tokenize(&source) {
@@ -167,8 +172,13 @@ fn main() {
         return;
     }
 
-    // Full compilation: C file in /tmp, then gcc
-    let c_file = format!("/tmp/{}.c", output_name);
+    // Full compilation: C file in /tmp, then gcc. Use only the file name for
+    // the temp path so an output like `/tmp/foo` doesn't become `/tmp//tmp/foo.c`.
+    let c_stem = Path::new(&output_name)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| output_name.clone());
+    let c_file = format!("/tmp/{}.c", c_stem);
     if let Err(e) = fs::write(&c_file, &c_code) {
         eprintln!("Error writing C file: {}", e);
         std::process::exit(1);
@@ -271,9 +281,21 @@ fn compile_directory(dir: &str, output_dir: Option<&str>, stop_at: &str) {
     }
 }
 
+// Read a source file and, for .js/.lua inputs, transpile it to .fred source.
+// .fred files are returned verbatim.
+fn to_fred_source(path: &str, raw: String) -> Result<String, String> {
+    if path.ends_with(".js") {
+        js::transpile(&raw).map_err(|e| format!("JS transpile error in {}: {}", path, e))
+    } else if path.ends_with(".lua") {
+        lua::transpile(&raw).map_err(|e| format!("Lua transpile error in {}: {}", path, e))
+    } else {
+        Ok(raw)
+    }
+}
+
 fn compile_single_file(input_file: &str, output_name: &str, stop_at: &str) -> bool {
     // Read file
-    let source = match fs::read_to_string(input_file) {
+    let raw = match fs::read_to_string(input_file) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("✗ Error reading {}: {}", input_file, e);
@@ -281,14 +303,24 @@ fn compile_single_file(input_file: &str, output_name: &str, stop_at: &str) -> bo
         }
     };
 
-    // Early exit: for .lua files with --to-lua, just output as-is
-    if stop_at == "lua" && input_file.ends_with(".lua") {
-        let lua_file = format!("{}.lua", output_name);
-        if let Err(e) = fs::write(&lua_file, &source) {
-            eprintln!("✗ Error writing {}: {}", lua_file, e);
+    // .js/.lua are transpiled to .fred source first.
+    let transpiled = input_file.ends_with(".js") || input_file.ends_with(".lua");
+    let source = match to_fred_source(input_file, raw) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("✗ {}", e);
             return false;
         }
-        println!("  ✓ {}", lua_file);
+    };
+
+    // --to-fred on a .js/.lua file shows the transpiled .fred source.
+    if stop_at == "fred" && transpiled {
+        let fred_file = format!("{}.fred", output_name);
+        if let Err(e) = fs::write(&fred_file, &source) {
+            eprintln!("✗ Error writing .fred file: {}", e);
+            return false;
+        }
+        println!("  ✓ {}", fred_file);
         return true;
     }
 
@@ -379,65 +411,293 @@ fn compile_single_file(input_file: &str, output_name: &str, stop_at: &str) -> bo
     }
 }
 
-fn run_repl() {
-    println!("🔥 .fred REPL (type 'exit' to quit)");
+#[derive(PartialEq)]
+enum ReplMode {
+    Fred,
+    RawC,
+}
 
-    let stdin = io::stdin();
-    let reader = stdin.lock();
-    let mut lines = reader.lines();
-    let mut statement_buffer = String::new();
-    let mut executed_statements = String::new();
+fn run_repl() {
+    use rustyline::error::ReadlineError;
+    use rustyline::DefaultEditor;
+
+    println!("🔥 .fred REPL — type ':help' for commands, 'exit' to quit");
+
+    let mut rl = match DefaultEditor::new() {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("✗ Could not start line editor: {}", e);
+            return;
+        }
+    };
+
+    let mut mode = ReplMode::Fred;
+    let mut fred_src = String::new();   // accumulated .fred session source
+    let mut c_body = String::new();     // accumulated raw-C statements (main body)
+    let mut c_hdr = String::new();      // accumulated raw-C #include / top-level lines
+    let mut prev_fred = String::new();  // last full stdout (fred mode) for delta printing
+    let mut prev_c = String::new();     // last full stdout (raw-C mode)
+    let mut buffer = String::new();     // multi-line statement accumulator
     let mut counter = 0;
 
     loop {
-        print!("fred> ");
-        io::stdout().flush().unwrap();
+        let prompt = if !buffer.is_empty() {
+            "....  "
+        } else if mode == ReplMode::RawC {
+            "c> "
+        } else {
+            "fred> "
+        };
 
-        if let Some(Ok(line)) = lines.next() {
-            let trimmed = line.trim();
+        match rl.readline(prompt) {
+            Ok(line) => {
+                let _ = rl.add_history_entry(line.as_str());
+                let trimmed = line.trim();
 
-            // Check for exit command
-            if trimmed == "exit" || trimmed == "quit" {
-                println!("Goodbye!");
+                // Commands are only recognized between statements (empty buffer).
+                if buffer.is_empty() {
+                    match trimmed {
+                        "exit" | "quit" => {
+                            println!("Goodbye!");
+                            break;
+                        }
+                        ":clear" => {
+                            let _ = rl.clear_screen();
+                            continue;
+                        }
+                        ":reset" => {
+                            fred_src.clear();
+                            c_body.clear();
+                            c_hdr.clear();
+                            prev_fred.clear();
+                            prev_c.clear();
+                            buffer.clear();
+                            mode = ReplMode::Fred;
+                            println!("→ session reset (.fred mode, no state).");
+                            continue;
+                        }
+                        ":help" => {
+                            print_repl_help();
+                            continue;
+                        }
+                        ":c" => {
+                            // Show the C that the current .fred session transpiles to.
+                            if fred_src.trim().is_empty() {
+                                println!("(no .fred statements yet)");
+                            } else if let Ok(c) = build_fred_c(&fred_src) {
+                                print!("{}", c);
+                            }
+                            continue;
+                        }
+                        ":ast" => {
+                            // Show the .fred IR (AST) for the current session.
+                            if fred_src.trim().is_empty() {
+                                println!("(no .fred statements yet)");
+                            } else if let Ok(tokens) = lexer::tokenize(&fred_src) {
+                                match parser::parse(tokens) {
+                                    Ok(ast) => println!("{:#?}", ast),
+                                    Err(e) => eprintln!("✗ Parse error: {}", e),
+                                }
+                            }
+                            continue;
+                        }
+                        ":cmode" => {
+                            mode = ReplMode::RawC;
+                            println!("→ raw C mode. Lines compile as C; '#'-lines become includes. ':fred' to go back.");
+                            continue;
+                        }
+                        ":fred" => {
+                            mode = ReplMode::Fred;
+                            println!("→ .fred mode.");
+                            continue;
+                        }
+                        "" => continue,
+                        _ => {}
+                    }
+                }
+
+                buffer.push_str(&line);
+                buffer.push('\n');
+
+                if is_incomplete(&buffer) {
+                    continue; // keep accumulating; prompt switches to "...."
+                }
+
+                counter += 1;
+                match mode {
+                    ReplMode::Fred => {
+                        let full = format!("{}{}", fred_src, buffer);
+                        if let Ok(c) = build_fred_c(&full) {
+                            if let Some(out) = compile_and_run(&c, counter) {
+                                print_delta(&prev_fred, &out);
+                                prev_fred = out;
+                                fred_src = full;
+                            }
+                        }
+                    }
+                    ReplMode::RawC => {
+                        let (mut new_hdr, mut new_body) = (String::new(), String::new());
+                        for l in buffer.lines() {
+                            if l.trim_start().starts_with('#') {
+                                new_hdr.push_str(l);
+                                new_hdr.push('\n');
+                            } else {
+                                new_body.push_str(l);
+                                new_body.push('\n');
+                            }
+                        }
+                        let full_hdr = format!("{}{}", c_hdr, new_hdr);
+                        let full_body = format!("{}{}", c_body, new_body);
+                        let c = build_raw_c(&full_hdr, &full_body);
+                        if let Some(out) = compile_and_run(&c, counter) {
+                            print_delta(&prev_c, &out);
+                            prev_c = out;
+                            c_hdr = full_hdr;
+                            c_body = full_body;
+                        }
+                    }
+                }
+                buffer.clear();
+            }
+            Err(ReadlineError::Interrupted) => {
+                // Ctrl+C: abandon the in-progress statement, stay in the REPL.
+                buffer.clear();
+                continue;
+            }
+            Err(ReadlineError::Eof) => break, // Ctrl+D
+            Err(e) => {
+                eprintln!("✗ Input error: {}", e);
                 break;
             }
-
-            // Check for clear command
-            if trimmed == "clear" {
-                print!("\x1b[2J\x1b[H");
-                io::stdout().flush().unwrap();
-                continue;
-            }
-
-            // Skip empty lines
-            if trimmed.is_empty() {
-                continue;
-            }
-
-            // Add to buffer
-            statement_buffer.push_str(trimmed);
-            statement_buffer.push('\n');
-
-            // Check if statement looks complete (simple heuristic)
-            if !is_incomplete(&statement_buffer) {
-                counter += 1;
-                // Combine all executed statements with the new one
-                let full_code = format!("{}{}", executed_statements, statement_buffer);
-                if execute_statement(&full_code, counter) {
-                    // Only keep the statement if execution was successful
-                    executed_statements.push_str(&statement_buffer);
-                }
-                statement_buffer.clear();
-            } else {
-                // Incomplete statement, show continuation prompt
-                print!("     ");
-                io::stdout().flush().unwrap();
-            }
-        } else {
-            // EOF
-            break;
         }
     }
+}
+
+fn print_repl_help() {
+    println!("REPL commands:");
+    println!("  :help     show this help");
+    println!("  :c        show the C your current .fred session transpiles to");
+    println!("  :ast      show the .fred IR (AST) for the current session");
+    println!("  :cmode    switch to raw C mode (type C directly)");
+    println!("  :fred     switch back to .fred mode");
+    println!("  :reset    purge all session state, back to fresh .fred mode");
+    println!("  :clear    clear the screen (or just press Ctrl+L)");
+    println!("  exit      quit (or Ctrl+D)");
+}
+
+// Print only the part of `full` not already shown in `prev`. The session is
+// re-run from scratch each line, so earlier output is a prefix of the new
+// output — we slice it off so old prints don't repeat.
+fn print_delta(prev: &str, full: &str) {
+    if let Some(rest) = full.strip_prefix(prev) {
+        print!("{}", rest);
+    } else {
+        // Replay diverged (e.g. randomness/time) — show the whole thing.
+        print!("{}", full);
+    }
+    io::stdout().flush().unwrap();
+}
+
+// Run the full .fred session source through the pipeline, returning the C
+// source. Prints stage errors and returns Err so the caller drops the line.
+fn build_fred_c(src: &str) -> Result<String, ()> {
+    let tokens = match lexer::tokenize(src) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("✗ Lexer error: {}", e);
+            return Err(());
+        }
+    };
+    let ast = match parser::parse(tokens) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("✗ Parse error: {}", e);
+            return Err(());
+        }
+    };
+    let mut validator = validator::Validator::new();
+    validator.set_allow_nuke(true); // REPL is .fred
+    if let Err(errors) = validator.validate(&ast) {
+        eprintln!("✗ Validation errors:");
+        for err in errors {
+            eprintln!("  {}", err);
+        }
+        return Err(());
+    }
+    Ok(codegen::generate_c(&ast))
+}
+
+// Wrap accumulated raw-C lines into a compilable program.
+fn build_raw_c(hdr: &str, body: &str) -> String {
+    format!(
+        "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <math.h>\n{}\nint main(void) {{\n{}\nreturn 0;\n}}\n",
+        hdr, body
+    )
+}
+
+// Compile a C string with gcc and run it. Returns the program's stdout on a
+// successful compile+run (None if compilation or execution failed). Errors and
+// the program's stderr are surfaced directly. Temp files live in /tmp and are
+// cleaned up afterward.
+fn compile_and_run(c_code: &str, counter: usize) -> Option<String> {
+    let temp_name = format!("__repl_{}", counter);
+    let c_file = format!("/tmp/{}.c", temp_name);
+    let bin_file = format!("/tmp/{}", temp_name);
+
+    if let Err(e) = fs::write(&c_file, c_code) {
+        eprintln!("✗ Error writing C file: {}", e);
+        return None;
+    }
+
+    let result = (|| {
+        let output = Command::new("gcc")
+            .args(&["-o", &bin_file, &c_file, "-lm"])
+            .output();
+        match output {
+            Ok(out) => {
+                if !out.status.success() {
+                    let err = String::from_utf8_lossy(&out.stderr);
+                    for line in err.lines() {
+                        if line.contains("error:") {
+                            eprintln!("✗ {}", line.split("error:").nth(1).unwrap_or("").trim());
+                        }
+                    }
+                    return None;
+                }
+            }
+            Err(e) => {
+                eprintln!("✗ Error invoking GCC: {}", e);
+                return None;
+            }
+        }
+
+        match Command::new(&bin_file).output() {
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                if !stderr.is_empty() {
+                    eprint!("{}", stderr);
+                }
+                if !out.status.success() {
+                    use std::os::unix::process::ExitStatusExt;
+                    if out.status.signal() == Some(6) {
+                        eprintln!("💥 nuke() detonated — the program crashed (the REPL survives).");
+                    } else {
+                        eprintln!("✗ Execution failed");
+                    }
+                    return None;
+                }
+                Some(String::from_utf8_lossy(&out.stdout).into_owned())
+            }
+            Err(e) => {
+                eprintln!("✗ Error running executable: {}", e);
+                None
+            }
+        }
+    })();
+
+    let _ = fs::remove_file(&bin_file);
+    let _ = fs::remove_file(&c_file);
+    result
 }
 
 fn is_incomplete(code: &str) -> bool {
@@ -463,126 +723,21 @@ fn is_incomplete(code: &str) -> bool {
     open_braces > 0 || code.trim().ends_with(',')
 }
 
-fn execute_statement(code: &str, counter: usize) -> bool {
-    // Tokenize
-    let tokens = match lexer::tokenize(code) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("✗ Lexer error: {}", e);
-            return false;
-        }
-    };
-
-    // Parse
-    let ast = match parser::parse(tokens) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("✗ Parse error: {}", e);
-            return false;
-        }
-    };
-
-    // Validate
-    let mut validator = validator::Validator::new();
-    validator.set_allow_nuke(true); // REPL is .fred
-    if let Err(errors) = validator.validate(&ast) {
-        eprintln!("✗ Validation errors:");
-        for err in errors {
-            eprintln!("  {}", err);
-        }
-        return false;
-    }
-
-    // Generate C code
-    let c_code = codegen::generate_c(&ast);
-
-    // Write temporary C file
-    let temp_name = format!("__repl_{}", counter);
-    let c_file = format!("/tmp/{}.c", temp_name);
-    if let Err(e) = fs::write(&c_file, &c_code) {
-        eprintln!("✗ Error writing C file: {}", e);
-        return false;
-    }
-
-    // Compile with gcc
-    let output = Command::new("gcc")
-        .args(&["-o", &temp_name, &c_file, "-lm"])
-        .output();
-
-    match output {
-        Ok(out) => {
-            if !out.status.success() {
-                let err = String::from_utf8_lossy(&out.stderr);
-                // Only show relevant error lines
-                for line in err.lines() {
-                    if line.contains("error:") {
-                        eprintln!("✗ {}", line.split("error:").nth(1).unwrap_or("").trim());
-                    }
-                }
-                return false;
-            }
-        }
-        Err(e) => {
-            eprintln!("✗ Error invoking GCC: {}", e);
-            return false;
-        }
-    }
-
-    // Run the executable
-    let run_output = Command::new(format!("./{}", temp_name))
-        .output();
-
-    let mut success = true;
-    match run_output {
-        Ok(out) => {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            if !stdout.is_empty() {
-                print!("{}", stdout);
-            }
-            // Surface the program's stderr (e.g. the nuke banner)
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            if !stderr.is_empty() {
-                eprint!("{}", stderr);
-            }
-            if !out.status.success() {
-                // Distinguish a deliberate nuke (SIGABRT) from a generic failure
-                use std::os::unix::process::ExitStatusExt;
-                if out.status.signal() == Some(6) {
-                    eprintln!("💥 nuke() detonated — the program crashed (the REPL survives).");
-                } else {
-                    eprintln!("✗ Execution failed");
-                }
-                success = false;
-            }
-        }
-        Err(e) => {
-            eprintln!("✗ Error running executable: {}", e);
-            success = false;
-        }
-    }
-
-    // Cleanup
-    let _ = fs::remove_file(format!("./{}", temp_name));
-    let _ = fs::remove_file(&c_file);
-
-    success
-}
-
 fn print_help() {
     println!("🔥 .fred Compiler — Lua+JS→C static compiler\n");
     println!("USAGE:");
     println!("  fred                              Drop into interactive REPL");
     println!("  fred <file.fred|file.lua|file.js> [output]  Compile to executable");
     println!("  fred -o <dir> <input_dir>        Batch compile directory");
-    println!("  fred --to-lua <file.js>           Output Lua only (JS transpile)");
-    println!("  fred --to-fred <file>             Output .fred IR (AST)");
+    println!("  fred --to-fred <file.js>          Show the .fred a JS file transpiles to");
+    println!("  fred --to-fred <file>             Output .fred IR (AST) for .fred/.lua");
     println!("  fred --to-c <file>                Output C code only\n");
 
     println!("EXAMPLES:");
     println!("  fred examples/01_hello_world.fred");
-    println!("  fred --to-lua source.js output.lua");
+    println!("  fred examples/16_math.js out      # JavaScript → native binary");
+    println!("  fred --to-fred mycode.js out      # see the transpiled .fred");
     println!("  fred --to-c source.fred output.c");
-    println!("  fred --to-fred mycode.lua");
     println!("  fred mycode.js myapp");
     println!("  fred -o ./bin src/                Compile all src/ → ./bin/");
     println!("  fred                              # REPL mode\n");

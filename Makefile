@@ -19,27 +19,19 @@ help:
 check-deps:
 	@echo "Checking dependencies..."
 	@which gcc > /dev/null || (echo "✗ gcc not found. Install with: apt-get install build-essential" && exit 1)
-	@which node > /dev/null || (echo "✗ node not found. Install from https://nodejs.org" && exit 1)
 	@which cargo > /dev/null || (echo "✗ cargo not found. Install Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh" && exit 1)
 	@echo "✓ All dependencies found"
-
-install-node-deps:
-	@echo "Installing Node dependencies for CASTL..."
-	@cd castl-js && npm install --silent && cd ..
-	@echo "✓ Node dependencies installed"
 
 build: check-deps
 	@echo "Building fredc..."
 	@cd fredc && cargo build --release
 	@echo "✓ fredc built"
 
-install: build install-node-deps
-	@mkdir -p $(INSTALL_PREFIX) $(HOME)/.local/share/fredify
+install: build
+	@mkdir -p $(INSTALL_PREFIX)
 	@cp $(FREDC_BINARY) $(INSTALL_PREFIX)/fredc-bin.tmp && mv -f $(INSTALL_PREFIX)/fredc-bin.tmp $(INSTALL_PREFIX)/fredc-bin
-	@cp -r castl-js $(HOME)/.local/share/fredify/
 	@echo '#!/bin/bash' > /tmp/fred_wrapper.sh
 	@echo 'FREDC="$$(dirname "$$0")/fredc-bin"' >> /tmp/fred_wrapper.sh
-	@echo 'CASTL="$(HOME)/.local/share/fredify/castl-js"' >> /tmp/fred_wrapper.sh
 	@echo 'ARGS=()' >> /tmp/fred_wrapper.sh
 	@echo 'FILE=""' >> /tmp/fred_wrapper.sh
 	@echo 'while [[ $$# -gt 0 ]]; do' >> /tmp/fred_wrapper.sh
@@ -52,8 +44,7 @@ install: build install-node-deps
 	@echo 'done' >> /tmp/fred_wrapper.sh
 	@echo '[ -z "$$FILE" ] && exec "$$FREDC"' >> /tmp/fred_wrapper.sh
 	@echo 'case "$$FILE" in' >> /tmp/fred_wrapper.sh
-	@echo '  *.js) TMP="/tmp/$$(basename "$$FILE" .js).lua"; OUTPUT="$${2:-./$$(basename "$$FILE" .js)}"; node "$$CASTL/castl.js" "$$FILE" > "$$TMP" 2>/dev/null || exit 1; if [[ "$${ARGS[@]}" == *"--to-lua"* ]]; then cp "$$TMP" "$$OUTPUT.lua"; echo "✓ Generated: $$OUTPUT.lua"; else exec "$$FREDC" "$${ARGS[@]}" "$$TMP" "$$OUTPUT"; fi;;' >> /tmp/fred_wrapper.sh
-	@echo '  *.lua|*.fred) OUTPUT="$${2:-./$$(basename "$$FILE" | sed '\''s/\.[^.]*$$//'\'')}" ; exec "$$FREDC" "$${ARGS[@]}" "$$FILE" "$$OUTPUT";;' >> /tmp/fred_wrapper.sh
+	@echo '  *.js|*.lua|*.fred) OUTPUT="$${2:-./$$(basename "$$FILE" | sed '\''s/\.[^.]*$$//'\'')}" ; exec "$$FREDC" "$${ARGS[@]}" "$$FILE" "$$OUTPUT";;' >> /tmp/fred_wrapper.sh
 	@echo '  *) exec "$$FREDC" "$${ARGS[@]}" "$$FILE";;' >> /tmp/fred_wrapper.sh
 	@echo 'esac' >> /tmp/fred_wrapper.sh
 	@cp /tmp/fred_wrapper.sh $(FRED_WRAPPER) && chmod +x $(FRED_WRAPPER) && rm /tmp/fred_wrapper.sh
@@ -69,10 +60,18 @@ clean:
 	@rm -f /tmp/__repl_* /tmp/*.c
 	@echo "✓ Cleaned"
 
-test: build install-node-deps
-	@echo "Testing examples..."
-	@for f in examples/0[1-3]_*.fred; do \
-		echo "Testing $$f..."; \
-		$(FREDC_BINARY) "$$f" > /dev/null || exit 1; \
-	done
-	@echo "✓ Examples pass"
+test: build
+	@echo "Compiling every example (.fred / .js / .lua)..."
+	@fail=0; \
+	for f in examples/*.fred examples/*.js examples/*.lua; do \
+		printf '  %-40s ' "$$f"; \
+		if $(FREDC_BINARY) "$$f" /tmp/fredtest_out > /dev/null 2>&1; then \
+			echo "ok"; \
+		else \
+			echo "FAIL"; fail=1; \
+			$(FREDC_BINARY) "$$f" /tmp/fredtest_out 2>&1 | sed 's/^/      /'; \
+		fi; \
+	done; \
+	rm -f /tmp/fredtest_out /tmp/fredtest_out.c; \
+	if [ $$fail -ne 0 ]; then echo "✗ Some examples failed"; exit 1; fi
+	@echo "✓ All examples compile (.fred, .js, .lua)"

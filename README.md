@@ -7,8 +7,17 @@ No runtime. No garbage collector. Just C under the hood.
 ## Features
 
 ### Input Languages
-- **JavaScript**: Transpiled to Lua via CASTL, then to C
-- **Lua**: Direct parsing and compilation to C
+
+All three are compiled to native executables with **no external tools** — no
+Node, no Lua interpreter. Each non-native frontend is a hand-written Rust
+transpiler that emits `.fred`, which then goes through the normal pipeline.
+
+- **`.fred`**: The native language (Lua-like brace syntax). Full feature set.
+- **JavaScript** (`.js`): Real modern-JS subset → `.fred` (`fredc/src/js.rs`).
+  See [JavaScript support](#javascript-support).
+- **Lua** (`.lua`): Real Lua subset (`function/end`, `then`, `local`, `..`,
+  `~=`, `#`, `ipairs`, numeric `for`) → `.fred` (`fredc/src/lua.rs`).
+  See [Lua support](#lua-support).
 - Unified intermediate representation (`.fred`)
 
 ### Type System
@@ -103,9 +112,23 @@ fred> for i in [1, 2, 3] { print(i) }
 1
 2
 3
-fred> clear
 fred> exit
 ```
+
+Line editing, history (↑/↓) and **Ctrl+L** (clear screen) come from `rustyline`.
+The session is replayed-from-source each line, but only *new* output is printed.
+
+REPL commands:
+
+| Command | Does |
+|---------|------|
+| `:c`     | Show the C your current session transpiles to |
+| `:ast`   | Show the `.fred` IR (AST) for the current session |
+| `:cmode` | Switch to a raw **C** scratchpad (type C directly; `#`-lines become includes) |
+| `:fred`  | Switch back to `.fred` mode |
+| `:reset` | Purge all session state, back to a fresh `.fred` session |
+| `:clear` | Clear the screen (or just press Ctrl+L) |
+| `exit`   | Quit (or Ctrl+D) |
 
 ### Batch compile a project
 ```bash
@@ -145,14 +168,11 @@ print(msg)
 ### Intermediate outputs
 Stop compilation at any stage for debugging:
 ```bash
-# Output .fred IR (Abstract Syntax Tree)
-fred --to-fred source.lua output.fred
+# Show the .fred a JavaScript file transpiles to
+fred --to-fred mycode.js output
 
 # Output C code only (don't compile with gcc)
 fred --to-c source.fred output.c
-
-# Output Lua from JavaScript (CASTL transpile only)
-fred --to-lua mycode.js output.lua
 
 # Full compilation to executable (default)
 fred source.fred
@@ -186,6 +206,10 @@ See `examples/` directory for 15 working demonstrations:
 13. `13_snake_game.fred` - Interactive snake with real arrow-key/WASD input (`input_key()`)
 14. `14_new_features.fred` - `arr[i]=`, compound assignment, string methods, `os.sleep`, `nuke()`
 15. `15_weather_http.fred` - Networking: `http.get`/`http.post` + polling loop
+16. `16_math.js` - **JavaScript**: recursion, GCD, primes, `.map`/`.reduce` → native
+17. `17_rock_paper_scissors.js` - **JavaScript** port of #11 (arrow fns, `input_key()`)
+18. `18_primes.lua` - **Lua**: real `function/end` syntax, primes, factorial, `^`
+19. `19_array_stats.lua` - **Lua**: `ipairs`, `#`, `table.sort`/`table.concat`
 
 ## Architecture
 
@@ -207,7 +231,52 @@ GCC Compilation
 Native Executable (x86-64)
 ```
 
-**For JavaScript inputs**, an additional transpilation step handles the JS→Lua conversion using [CASTL](https://github.com/paulbernier/castl) before the normal pipeline begins.
+**For JavaScript and Lua inputs**, a built-in transpiler (`fredc/src/js.rs` or
+`fredc/src/lua.rs`) parses the source and emits `.fred` before the normal
+pipeline begins. There is no Node.js or Lua interpreter dependency. Use
+`fred --to-fred file.js out` (or `file.lua`) to see the generated `.fred`.
+
+## JavaScript support
+
+The JS frontend handles a practical modern subset:
+
+- `let` / `const` / `var`, function declarations, **arrow functions** and
+  function expressions (a `const f = (x) => ...` becomes a real fred `fn`)
+- `if` / `else if` / `else`, `while`, C-style `for(;;)` (lowered to `while`),
+  `for...of` (→ fred `for-in`), `return`, `break`
+- Operators with JS→fred mapping: `===`/`!==` → `==`/`!=`, `&&`/`||` → `and`/`or`,
+  `!`, ternary, `+ - * / %`, `+=`/`-=`/`*=`/`/=`, `++`/`--` (as statements)
+- Template literals `` `${x}` ``, arrays, method/property calls
+- `console.log` → `print`, `Math.*` pass through, `parseInt` → `to_int_str`,
+  `.toUpperCase()`→`.uppercase()`, `.length` → `.len()`, plus `.map`/`.filter`/
+  `.reduce`/`.push`/`.pop`/etc. which line up 1:1
+- Compiler builtins like `input_key()` are callable directly
+
+**Not supported** (errors): objects/dicts `{}`, classes, regex, `continue`,
+destructuring, spread, async/generators. Arrays remain int-only (fred limit).
+
+## Lua support
+
+The Lua frontend (`fredc/src/lua.rs`) parses **real Lua**, not fred syntax:
+
+- `local` / global vars, `function name() ... end`, `local function`,
+  anonymous `function() ... end`
+- `if`/`elseif`/`else`/`end`, `while ... do`, numeric `for i = a, b[, step]`,
+  generic `for k, v in ipairs(t)` / `pairs(t)`, `repeat ... until`
+- Operators with Lua→fred mapping: `..` (concat) → template string,
+  `~=` → `!=`, `^` → `Math.pow`, `#x` → `x.len()`, `//` → `/`,
+  `and`/`or`/`not` pass through
+- `print` (multi-arg → spaced), `tostring` → `to_string`, `tonumber` →
+  `to_int_str`, `math.*` → `Math.*`, `table.*`/`os.*` pass through,
+  `s:upper()`/`string.upper(s)` → `.uppercase()`, `s:sub()` → `.substring()`
+- Array-style table constructors `{1, 2, 3}` → fred arrays
+
+**Not supported** (errors): key/value tables (dicts), metatables, multiple
+assignment/return (`a, b = 1, 2`), varargs `...`, coroutines, `goto`,
+modules/`require`. Arrays are int-only.
+
+⚠️ **Indexing is passed through verbatim** — Lua is 1-based, fred/C is 0-based.
+Prefer `ipairs` value-iteration over manual `t[i]` to keep results correct.
 
 The entire pipeline (tokenize → parse → validate → codegen → gcc) happens for each REPL interaction, enabling interactive development with full type safety.
 
@@ -268,7 +337,8 @@ Built with:
 - **Lexer/Parser**: Rust (hand-written)
 - **Codegen**: Rust → C
 - **Backend**: GCC (native compilation)
-- **JS Transpiler**: [CASTL](https://github.com/paulbernier/castl) by Paul Bernier
+- **REPL**: [rustyline](https://github.com/kkawakam/rustyline) (line editing, history, Ctrl+L)
+- **JS Transpiler**: hand-written in Rust (`fredc/src/js.rs`) — no external deps
 
 ### Running Tests
 
@@ -280,7 +350,7 @@ fred examples/*.fred   # Compile any example
 ### Building from Source
 
 ```bash
-make check-deps        # Verify gcc, node, cargo installed
+make check-deps        # Verify gcc, cargo installed
 make install           # Build and install fred command
 ```
 
@@ -288,8 +358,8 @@ make install           # Build and install fred command
 
 ## Credits
 
-- **CASTL**: JavaScript→Lua transpilation powered by [CASTL](https://github.com/paulbernier/castl) — an excellent, permissive transpiler. Major thanks to Paul Bernier and contributors.
-- **Inspiration**: Built on Lua syntax and semantics, combined with static typing for zero-cost abstraction.
+- **Inspiration**: Built on Lua-like syntax, combined with static typing for zero-cost abstraction.
+- The JavaScript frontend is a self-contained transpiler written for this project (`fredc/src/js.rs`); earlier versions used [CASTL](https://github.com/paulbernier/castl) by Paul Bernier, now removed.
 
 ## Documentation
 
