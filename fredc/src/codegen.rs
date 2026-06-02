@@ -116,20 +116,32 @@ impl CGen {
         for stmt in body {
             // Track locals so return of a local var resolves correctly.
             if let Stmt::Let { name, value: Some(v) } = stmt {
-                if self.expr_returns_string(v) {
+                if self.expr_returns_dict(v) {
+                    self.var_types.insert(name.clone(), "Dict".to_string());
+                } else if self.expr_returns_value(v) {
+                    self.var_types.insert(name.clone(), "Value".to_string());
+                } else if self.expr_returns_string(v) {
                     self.var_types.insert(name.clone(), "String".to_string());
                 } else if self.expr_returns_array(v) {
                     self.var_types.insert(name.clone(), "Array".to_string());
+                } else if self.expr_returns_float(v) {
+                    self.var_types.insert(name.clone(), "double".to_string());
                 } else {
                     self.var_types.insert(name.clone(), "int64_t".to_string());
                 }
             }
             let found = match stmt {
                 Stmt::Return(Some(e)) => {
-                    if self.expr_returns_string(e) {
+                    if self.expr_returns_dict(e) {
+                        Some("Dict".to_string())
+                    } else if self.expr_returns_value(e) {
+                        Some("Value".to_string())
+                    } else if self.expr_returns_string(e) {
                         Some("String".to_string())
                     } else if self.expr_returns_array(e) {
                         Some("Array".to_string())
+                    } else if self.expr_returns_float(e) {
+                        Some("double".to_string())
                     } else {
                         None
                     }
@@ -233,11 +245,12 @@ impl CGen {
         // Math functions
         self.output.push_str("#include <math.h>\n");
         self.output.push_str("int64_t math_abs(int64_t x) { return (x < 0) ? -x : x; }\n");
+        self.output.push_str("double math_fabs(double x) { return fabs(x); }\n");
         self.output.push_str("int64_t math_floor(double x) { return (int64_t)floor(x); }\n");
         self.output.push_str("int64_t math_ceil(double x) { return (int64_t)ceil(x); }\n");
         self.output.push_str("int64_t math_round(double x) { return (int64_t)round(x); }\n");
-        self.output.push_str("int64_t math_sqrt(double x) { return (int64_t)sqrt(x); }\n");
-        self.output.push_str("int64_t math_pow(double x, double y) { return (int64_t)pow(x, y); }\n");
+        self.output.push_str("double math_sqrt(double x) { return sqrt(x); }\n");
+        self.output.push_str("double math_pow(double x, double y) { return pow(x, y); }\n");
         self.output.push_str("int64_t math_max(int64_t a, int64_t b) { return (a > b) ? a : b; }\n");
         self.output.push_str("int64_t math_min(int64_t a, int64_t b) { return (a < b) ? a : b; }\n");
         self.output.push_str("int64_t math_random() { return rand() % 1000000; }\n\n");
@@ -328,6 +341,7 @@ impl CGen {
         self.output.push_str("int64_t to_int(double x) { return (int64_t)x; }\n");
         self.output.push_str("double to_float(int64_t x) { return (double)x; }\n");
         self.output.push_str("String to_string(int64_t x) { String s; char buf[64]; snprintf(buf, sizeof(buf), \"%ld\", x); s = string_new_literal(buf); return s; }\n");
+        self.output.push_str("String to_string_f(double x) { String s; char buf[64]; snprintf(buf, sizeof(buf), \"%g\", x); s = string_new_literal(buf); return s; }\n");
         self.output.push_str("int64_t to_int_str(String s) { return strtoll(s.data, NULL, 10); }\n");
         self.output.push_str("int64_t string_length(String s) { return s.len; }\n\n");
 
@@ -495,6 +509,136 @@ impl CGen {
         self.output.push_str("  }\n");
         self.output.push_str("  return 0;\n");
         self.output.push_str("}\n\n");
+
+        self.emit_value_helpers();
+    }
+
+    // Boxed-container runtime: a tagged Value union and a string-keyed Dict.
+    // Scalars (int64_t/double/String/Array) stay native and fast; only object
+    // fields are boxed, and operations on them dispatch on the tag at runtime.
+    fn emit_value_helpers(&mut self) {
+        let c = r#"
+/* --- Dynamic Value + Dict (boxed containers) --- */
+struct Dict;
+typedef struct Value {
+  int tag; /* 0=int 1=float 2=str 3=dict 4=bool 5=nil */
+  int64_t i;
+  double f;
+  String s;
+  struct Dict* d;
+} Value;
+
+typedef struct Dict {
+  char** keys;
+  Value* vals;
+  int64_t len;
+  int64_t cap;
+} Dict;
+
+Value v_int(int64_t x)   { Value v; v.tag=0; v.i=x; return v; }
+Value v_float(double x)  { Value v; v.tag=1; v.f=x; return v; }
+Value v_str(String s)    { Value v; v.tag=2; v.s=s; return v; }
+Value v_dict(Dict* d)    { Value v; v.tag=3; v.d=d; return v; }
+Value v_bool(int64_t b)  { Value v; v.tag=4; v.i=b?1:0; return v; }
+Value v_nil(void)        { Value v; v.tag=5; return v; }
+
+int64_t v_as_int(Value v) {
+  switch (v.tag) { case 0: case 4: return v.i; case 1: return (int64_t)v.f;
+    case 2: return strtoll(v.s.data, NULL, 10); default: return 0; }
+}
+double v_as_float(Value v) {
+  switch (v.tag) { case 0: case 4: return (double)v.i; case 1: return v.f; default: return 0; }
+}
+Dict* v_as_dict(Value v) { return v.tag==3 ? v.d : NULL; }
+int64_t v_truth(Value v) {
+  switch (v.tag) { case 0: case 4: return v.i != 0; case 1: return v.f != 0;
+    case 2: return v.s.len != 0; case 3: return v.d != NULL; default: return 0; }
+}
+String v_to_string(Value v) {
+  switch (v.tag) {
+    case 0: return to_string(v.i);
+    case 1: return to_string_f(v.f);
+    case 2: return v.s;
+    case 4: return string_new_literal(v.i ? "true" : "false");
+    case 5: return string_new_literal("nil");
+    default: return string_new_literal("[object]");
+  }
+}
+void v_print1(Value v) {
+  switch (v.tag) {
+    case 0: printf("%ld", v.i); break;
+    case 1: printf("%g", v.f); break;
+    case 2: printf("%s", v.s.data); break;
+    case 4: printf("%s", v.i ? "true" : "false"); break;
+    case 5: printf("nil"); break;
+    default: printf("[object]"); break;
+  }
+}
+
+Value v_add(Value a, Value b) {
+  if (a.tag==2 || b.tag==2) return v_str(string_concat(v_to_string(a), v_to_string(b)));
+  if (a.tag==1 || b.tag==1) return v_float(v_as_float(a) + v_as_float(b));
+  return v_int(v_as_int(a) + v_as_int(b));
+}
+Value v_sub(Value a, Value b) {
+  if (a.tag==1 || b.tag==1) return v_float(v_as_float(a) - v_as_float(b));
+  return v_int(v_as_int(a) - v_as_int(b));
+}
+Value v_mul(Value a, Value b) {
+  if (a.tag==1 || b.tag==1) return v_float(v_as_float(a) * v_as_float(b));
+  return v_int(v_as_int(a) * v_as_int(b));
+}
+Value v_div(Value a, Value b) {
+  if (a.tag==1 || b.tag==1) return v_float(v_as_float(a) / v_as_float(b));
+  return v_int(v_as_int(a) / v_as_int(b));
+}
+Value v_mod(Value a, Value b) { return v_int(v_as_int(a) % v_as_int(b)); }
+
+int64_t v_eq(Value a, Value b) {
+  if (a.tag==2 && b.tag==2) return strcmp(a.s.data, b.s.data) == 0;
+  if (a.tag==2 || b.tag==2) return 0;
+  if (a.tag==1 || b.tag==1) return v_as_float(a) == v_as_float(b);
+  return v_as_int(a) == v_as_int(b);
+}
+int64_t v_lt(Value a, Value b) { return v_as_float(a) <  v_as_float(b); }
+int64_t v_le(Value a, Value b) { return v_as_float(a) <= v_as_float(b); }
+int64_t v_gt(Value a, Value b) { return v_as_float(a) >  v_as_float(b); }
+int64_t v_ge(Value a, Value b) { return v_as_float(a) >= v_as_float(b); }
+
+Dict* dict_new(void) {
+  Dict* d = malloc(sizeof(Dict));
+  d->len = 0; d->cap = 8;
+  d->keys = malloc(sizeof(char*) * d->cap);
+  d->vals = malloc(sizeof(Value) * d->cap);
+  return d;
+}
+void dict_set(Dict* d, const char* k, Value v) {
+  for (int64_t i = 0; i < d->len; i++)
+    if (strcmp(d->keys[i], k) == 0) { d->vals[i] = v; return; }
+  if (d->len >= d->cap) {
+    d->cap *= 2;
+    d->keys = realloc(d->keys, sizeof(char*) * d->cap);
+    d->vals = realloc(d->vals, sizeof(Value) * d->cap);
+  }
+  d->keys[d->len] = strdup(k);
+  d->vals[d->len] = v;
+  d->len++;
+}
+Value dict_get(Dict* d, const char* k) {
+  if (!d) return v_nil();
+  for (int64_t i = 0; i < d->len; i++)
+    if (strcmp(d->keys[i], k) == 0) return d->vals[i];
+  return v_nil();
+}
+int64_t dict_has(Dict* d, const char* k) {
+  if (!d) return 0;
+  for (int64_t i = 0; i < d->len; i++)
+    if (strcmp(d->keys[i], k) == 0) return 1;
+  return 0;
+}
+
+"#;
+        self.output.push_str(c);
     }
 
     fn sanitize_name(&self, name: &str) -> String {
@@ -529,7 +673,8 @@ impl CGen {
                         .collect::<Vec<_>>()
                         .join(", ")
                 };
-                let ret_type = self.fn_types.get(name).cloned().unwrap_or_else(|| "int64_t".to_string());
+                let ret_tag = self.fn_types.get(name).cloned().unwrap_or_else(|| "int64_t".to_string());
+                let ret_type = if ret_tag == "Dict" { "Dict*".to_string() } else { ret_tag };
                 // Params are int64_t; register them so the body generates correctly.
                 let saved_types = self.var_types.clone();
                 for p in params {
@@ -548,18 +693,30 @@ impl CGen {
                 if let Some(val) = value {
                     let is_array = self.expr_returns_array(val);
                     let is_string = self.expr_returns_string(val);
+                    let is_float = self.expr_returns_float(val);
+                    let is_dict = self.expr_returns_dict(val);
+                    let is_value = self.expr_returns_value(val);
                     let is_file_handle = if let Expr::MethodCall { obj, method, .. } = val {
                         self.expr_to_string(obj) == "io" && method == "open"
                     } else {
                         false
                     };
                     let expr = self.gen_expr(val);
-                    if is_array {
+                    if is_dict {
+                        self.var_types.insert(name.clone(), "Dict".to_string());
+                        self.emit(&format!("Dict* {} = {};", name, expr));
+                    } else if is_value {
+                        self.var_types.insert(name.clone(), "Value".to_string());
+                        self.emit(&format!("Value {} = {};", name, expr));
+                    } else if is_array {
                         self.var_types.insert(name.clone(), "Array".to_string());
                         self.emit(&format!("Array {} = {};", name, expr));
                     } else if is_string {
                         self.var_types.insert(name.clone(), "String".to_string());
                         self.emit(&format!("String {} = {};", name, expr));
+                    } else if is_float {
+                        self.var_types.insert(name.clone(), "double".to_string());
+                        self.emit(&format!("double {} = {};", name, expr));
                     } else if is_file_handle {
                         self.var_types.insert(name.clone(), "FileHandle".to_string());
                         self.emit(&format!("FileHandle {} = {};", name, expr));
@@ -573,14 +730,45 @@ impl CGen {
                 }
             }
             Stmt::Assign { target, value } => {
-                let expr = self.gen_expr(value);
+                let target_is_value = self.var_types.get(target).map(|t| t == "Value").unwrap_or(false);
+                let expr = if target_is_value {
+                    self.box_value(value)
+                } else {
+                    self.gen_expr(value)
+                };
                 self.emit(&format!("{} = {};", target, expr));
             }
             Stmt::AssignIndex { obj, index, value } => {
-                let obj_str = self.gen_expr(obj);
-                let idx_str = self.gen_expr(index);
-                let val_str = self.gen_expr(value);
-                self.emit(&format!("array_set(&{}, {}, {});", obj_str, idx_str, val_str));
+                if self.expr_returns_dict(obj) || self.expr_returns_value(obj) {
+                    // dict["key"] = value
+                    let dict_str = if self.expr_returns_value(obj) {
+                        format!("v_as_dict({})", self.gen_expr(obj))
+                    } else {
+                        self.gen_expr(obj)
+                    };
+                    let key = self.gen_expr(index);
+                    let val_str = self.box_value(value);
+                    if self.expr_returns_string(index) {
+                        self.emit(&format!("dict_set({}, {}.data, {});", dict_str, key, val_str));
+                    } else {
+                        self.emit(&format!("dict_set({}, {}, {});", dict_str, key, val_str));
+                    }
+                } else {
+                    let obj_str = self.gen_expr(obj);
+                    let idx_str = self.gen_int(index);
+                    let val_str = self.gen_expr(value);
+                    self.emit(&format!("array_set(&{}, {}, {});", obj_str, idx_str, val_str));
+                }
+            }
+            Stmt::AssignField { obj, field, value } => {
+                let esc = field.replace('\\', "\\\\").replace('"', "\\\"");
+                let dict_str = if self.expr_returns_value(obj) {
+                    format!("v_as_dict({})", self.gen_expr(obj))
+                } else {
+                    self.gen_expr(obj)
+                };
+                let val_str = self.box_value(value);
+                self.emit(&format!("dict_set({}, \"{}\", {});", dict_str, esc, val_str));
             }
             Stmt::If {
                 cond,
@@ -695,6 +883,10 @@ impl CGen {
                     format!("{}", n)
                 }
             }
+            Expr::Float(n) => {
+                // Always emit a valid C double literal (with a decimal point or exponent).
+                format!("{:?}", n)
+            }
             Expr::String(s) => {
                 let escaped = s.replace("\\", "\\\\")
                     .replace("\"", "\\\"")
@@ -707,6 +899,49 @@ impl CGen {
             Expr::Nil => "0".to_string(),
             Expr::Id(name) => name.clone(),
             Expr::BinOp { left, op, right } => {
+                // Boxed-value path: if either side is a Value, dispatch at runtime.
+                if self.expr_returns_value(left) || self.expr_returns_value(right) {
+                    match op.as_str() {
+                        "+" | "-" | "*" | "/" | "%" => {
+                            let fname = match op.as_str() {
+                                "+" => "v_add", "-" => "v_sub", "*" => "v_mul",
+                                "/" => "v_div", _ => "v_mod",
+                            };
+                            let lb = self.box_value(left);
+                            let rb = self.box_value(right);
+                            return format!("{}({}, {})", fname, lb, rb);
+                        }
+                        "==" | "!=" => {
+                            let lb = self.box_value(left);
+                            let rb = self.box_value(right);
+                            let eq = format!("v_eq({}, {})", lb, rb);
+                            return if op == "==" { eq } else { format!("(!{})", eq) };
+                        }
+                        "<" | "<=" | ">" | ">=" => {
+                            let fname = match op.as_str() {
+                                "<" => "v_lt", "<=" => "v_le", ">" => "v_gt", _ => "v_ge",
+                            };
+                            let lb = self.box_value(left);
+                            let rb = self.box_value(right);
+                            return format!("{}({}, {})", fname, lb, rb);
+                        }
+                        "and" | "or" => {
+                            let lt = if self.expr_returns_value(left) {
+                                format!("v_truth({})", self.gen_expr(left))
+                            } else {
+                                self.gen_expr(left)
+                            };
+                            let rt = if self.expr_returns_value(right) {
+                                format!("v_truth({})", self.gen_expr(right))
+                            } else {
+                                self.gen_expr(right)
+                            };
+                            let c = if op == "and" { "&&" } else { "||" };
+                            return format!("({} {} {})", lt, c, rt);
+                        }
+                        _ => {}
+                    }
+                }
                 let l = self.gen_expr(left);
                 let r = self.gen_expr(right);
                 if op == "+" {
@@ -751,13 +986,33 @@ impl CGen {
                         if args.is_empty() {
                             return "printf(\"%s\", \"\")".to_string();
                         }
+                        // If any arg is a boxed Value, emit a sequence of dispatched
+                        // prints rather than a single printf (tags resolve at runtime).
+                        if args.iter().any(|a| self.expr_returns_value(a)) {
+                            let mut parts = Vec::new();
+                            for arg in args {
+                                if self.expr_returns_value(arg) {
+                                    parts.push(format!("v_print1({})", self.gen_expr(arg)));
+                                } else if self.expr_returns_string(arg) {
+                                    parts.push(format!("printf(\"%s\", {}.data)", self.gen_expr(arg)));
+                                } else if self.expr_returns_float(arg) {
+                                    parts.push(format!("printf(\"%g\", {})", self.gen_expr(arg)));
+                                } else {
+                                    parts.push(format!("printf(\"%ld\", {})", self.gen_expr(arg)));
+                                }
+                            }
+                            parts.push("printf(\"\\n\")".to_string());
+                            return format!("({})", parts.join(", "));
+                        }
                         let mut format_str = String::new();
                         let mut arg_values = Vec::new();
                         for arg in args {
-                            let is_string = self.expr_returns_string(arg);
-                            if is_string {
+                            if self.expr_returns_string(arg) {
                                 format_str.push_str("%s");
                                 arg_values.push(format!("{}.data", self.gen_expr(arg)));
+                            } else if self.expr_returns_float(arg) {
+                                format_str.push_str("%g");
+                                arg_values.push(self.gen_expr(arg));
                             } else {
                                 format_str.push_str("%ld");
                                 arg_values.push(self.gen_expr(arg));
@@ -800,16 +1055,28 @@ impl CGen {
 
                 // Math library handling
                 if obj_str == "Math" {
-                    let args_str = args.iter().map(|a| self.gen_expr(a)).collect::<Vec<_>>().join(", ");
+                    // Unbox any boxed Value args: double-taking fns get v_as_float,
+                    // int-taking fns (max/min) get v_as_int.
+                    let as_floats = args.iter().map(|a| self.gen_float(a)).collect::<Vec<_>>().join(", ");
+                    let as_ints = args.iter().map(|a| self.gen_int(a)).collect::<Vec<_>>().join(", ");
                     return match method.as_str() {
-                        "abs" => format!("math_abs({})", args_str),
-                        "floor" => format!("math_floor({})", args_str),
-                        "ceil" => format!("math_ceil({})", args_str),
-                        "round" => format!("math_round({})", args_str),
-                        "sqrt" => format!("math_sqrt({})", args_str),
-                        "pow" => format!("math_pow({})", args_str),
-                        "max" => format!("math_max({})", args_str),
-                        "min" => format!("math_min({})", args_str),
+                        "abs" => {
+                            let arg_is_float = args.get(0)
+                                .map(|a| self.expr_returns_float(a) || self.expr_returns_value(a))
+                                .unwrap_or(false);
+                            if arg_is_float {
+                                format!("math_fabs({})", as_floats)
+                            } else {
+                                format!("math_abs({})", as_ints)
+                            }
+                        }
+                        "floor" => format!("math_floor({})", as_floats),
+                        "ceil" => format!("math_ceil({})", as_floats),
+                        "round" => format!("math_round({})", as_floats),
+                        "sqrt" => format!("math_sqrt({})", as_floats),
+                        "pow" => format!("math_pow({})", as_floats),
+                        "max" => format!("math_max({})", as_ints),
+                        "min" => format!("math_min({})", as_ints),
                         "random" => "math_random()".to_string(),
                         _ => "0".to_string(),
                     };
@@ -1059,13 +1326,33 @@ impl CGen {
                 }
             }
             Expr::Index { obj, index } => {
-                let o = self.gen_expr(obj);
-                let i = self.gen_expr(index);
-                format!("array_get(&{}, {})", o, i)
+                if self.expr_returns_dict(obj) {
+                    let key = self.gen_expr(index);
+                    if self.expr_returns_string(index) {
+                        format!("dict_get({}, {}.data)", self.gen_expr(obj), key)
+                    } else {
+                        format!("dict_get({}, {})", self.gen_expr(obj), key)
+                    }
+                } else if self.expr_returns_value(obj) {
+                    let key = self.gen_expr(index);
+                    format!("dict_get(v_as_dict({}), {}.data)", self.gen_expr(obj), key)
+                } else {
+                    let o = self.gen_expr(obj);
+                    let i = self.gen_int(index);
+                    format!("array_get(&{}, {})", o, i)
+                }
             }
             Expr::Field { obj, field } => {
-                let o = self.gen_expr(obj);
-                format!("{}.{}", o, field)
+                let esc = field.replace('\\', "\\\\").replace('"', "\\\"");
+                if self.expr_returns_dict(obj) {
+                    format!("dict_get({}, \"{}\")", self.gen_expr(obj), esc)
+                } else if self.expr_returns_value(obj) {
+                    // obj is itself a boxed Value holding a dict (nested access)
+                    format!("dict_get(v_as_dict({}), \"{}\")", self.gen_expr(obj), esc)
+                } else {
+                    // Legacy C struct field access (e.g. internal helpers)
+                    format!("{}.{}", self.gen_expr(obj), field)
+                }
             }
             Expr::Array(elements) => {
                 let mut code = "({ ".to_string();
@@ -1077,7 +1364,16 @@ impl CGen {
                 code.push_str("__arr; })");
                 code
             }
-            Expr::Object(_fields) => "0".to_string(), // Stub for now
+            Expr::Object(fields) => {
+                let mut code = "({ Dict* __d = dict_new(); ".to_string();
+                for (key, val) in fields {
+                    let boxed = self.box_value(val);
+                    let esc = key.replace('\\', "\\\\").replace('"', "\\\"");
+                    code.push_str(&format!("dict_set(__d, \"{}\", {}); ", esc, boxed));
+                }
+                code.push_str("__d; })");
+                code
+            }
             Expr::Closure { .. } => "0".to_string(), // Closures handled in method calls
             Expr::TemplateString(nodes) => {
                 let mut parts = Vec::new();
@@ -1093,8 +1389,12 @@ impl CGen {
                         }
                         crate::ast::TemplateStringNode::Expr(e) => {
                             let expr_code = self.gen_expr(e);
-                            if self.expr_returns_string(e) {
+                            if self.expr_returns_value(e) {
+                                parts.push(format!("v_to_string({})", expr_code));
+                            } else if self.expr_returns_string(e) {
                                 parts.push(expr_code);
+                            } else if self.expr_returns_float(e) {
+                                parts.push(format!("to_string_f({})", expr_code));
                             } else {
                                 parts.push(format!("to_string({})", expr_code));
                             }
@@ -1159,6 +1459,132 @@ impl CGen {
                 self.expr_returns_string(then_expr) || self.expr_returns_string(else_expr)
             }
             _ => false,
+        }
+    }
+
+    // True if the expression's C type is `double`. Drives `double` var declarations,
+    // %g printing, and to_string_f interpolation. Floatness propagates through
+    // arithmetic: any float operand makes the result a float.
+    fn expr_returns_float(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Float(_) => true,
+            Expr::Id(name) => self.var_types.get(name).map(|t| t == "double").unwrap_or(false),
+            Expr::BinOp { left, op, right } => {
+                matches!(op.as_str(), "+" | "-" | "*" | "/" | "%")
+                    && !self.expr_returns_string(left)
+                    && !self.expr_returns_string(right)
+                    && (self.expr_returns_float(left) || self.expr_returns_float(right))
+            }
+            Expr::UnOp { op, expr } => op == "-" && self.expr_returns_float(expr),
+            Expr::Call { func, .. } => {
+                if let Expr::Id(name) = func.as_ref() {
+                    name == "to_float"
+                        || self.fn_types.get(name).map(|t| t == "double").unwrap_or(false)
+                } else {
+                    false
+                }
+            }
+            Expr::MethodCall { obj, method, args } => {
+                let obj_str = self.expr_to_string(obj);
+                match obj_str.as_str() {
+                    "Math" => match method.as_str() {
+                        "sqrt" | "pow" => true,
+                        "abs" => args.get(0).map(|a| self.expr_returns_float(a)).unwrap_or(false),
+                        _ => false,
+                    },
+                    _ => false,
+                }
+            }
+            Expr::Ternary { then_expr, else_expr, .. } => {
+                self.expr_returns_float(then_expr) || self.expr_returns_float(else_expr)
+            }
+            _ => false,
+        }
+    }
+
+    // True if the expression is a Dict* (object literal or a var holding one).
+    fn expr_returns_dict(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Object(_) => true,
+            Expr::Id(name) => self.var_types.get(name).map(|t| t == "Dict").unwrap_or(false),
+            Expr::Call { func, .. } => {
+                if let Expr::Id(name) = func.as_ref() {
+                    self.fn_types.get(name).map(|t| t == "Dict").unwrap_or(false)
+                } else {
+                    false
+                }
+            }
+            Expr::Ternary { then_expr, else_expr, .. } => {
+                self.expr_returns_dict(then_expr) || self.expr_returns_dict(else_expr)
+            }
+            _ => false,
+        }
+    }
+
+    // True if the expression's C type is the boxed `Value` (object field reads,
+    // value-keyed index, arithmetic involving a boxed operand, etc.).
+    fn expr_returns_value(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Id(name) => self.var_types.get(name).map(|t| t == "Value").unwrap_or(false),
+            // o.field is a dict read iff the object is a dict/value
+            Expr::Field { obj, .. } => self.expr_returns_dict(obj) || self.expr_returns_value(obj),
+            // o["key"] dict read
+            Expr::Index { obj, .. } => self.expr_returns_dict(obj) || self.expr_returns_value(obj),
+            Expr::BinOp { left, op, right } => {
+                matches!(op.as_str(), "+" | "-" | "*" | "/" | "%")
+                    && (self.expr_returns_value(left) || self.expr_returns_value(right))
+            }
+            Expr::Call { func, .. } => {
+                if let Expr::Id(name) = func.as_ref() {
+                    self.fn_types.get(name).map(|t| t == "Value").unwrap_or(false)
+                } else {
+                    false
+                }
+            }
+            Expr::Ternary { then_expr, else_expr, .. } => {
+                self.expr_returns_value(then_expr) || self.expr_returns_value(else_expr)
+            }
+            _ => false,
+        }
+    }
+
+    // Emit a C expression that yields a boxed `Value` for `expr`, wrapping a
+    // native scalar with the right constructor.
+    fn box_value(&mut self, expr: &Expr) -> String {
+        if self.expr_returns_value(expr) {
+            self.gen_expr(expr)
+        } else if matches!(expr, Expr::Bool(_)) {
+            format!("v_bool({})", self.gen_expr(expr))
+        } else if matches!(expr, Expr::Nil) {
+            "v_nil()".to_string()
+        } else if self.expr_returns_string(expr) {
+            format!("v_str({})", self.gen_expr(expr))
+        } else if self.expr_returns_float(expr) {
+            format!("v_float({})", self.gen_expr(expr))
+        } else if self.expr_returns_dict(expr) {
+            format!("v_dict({})", self.gen_expr(expr))
+        } else {
+            format!("v_int({})", self.gen_expr(expr))
+        }
+    }
+
+    // Emit an int64_t C expression, unboxing a Value if necessary (for use as an
+    // array index, loop bound, etc.).
+    fn gen_int(&mut self, expr: &Expr) -> String {
+        if self.expr_returns_value(expr) {
+            format!("v_as_int({})", self.gen_expr(expr))
+        } else {
+            self.gen_expr(expr)
+        }
+    }
+
+    // Emit a double C expression, unboxing a Value if necessary (for numeric
+    // builtins like Math.sqrt that take `double`).
+    fn gen_float(&mut self, expr: &Expr) -> String {
+        if self.expr_returns_value(expr) {
+            format!("v_as_float({})", self.gen_expr(expr))
+        } else {
+            self.gen_expr(expr)
         }
     }
 

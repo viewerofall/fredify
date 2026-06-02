@@ -410,6 +410,7 @@ enum Expr {
     Null,
     Ident(String),
     Array(Vec<Expr>),
+    Object(Vec<(String, Expr)>),
     Unary(String, Box<Expr>),
     Bin(String, Box<Expr>, Box<Expr>),
     Ternary(Box<Expr>, Box<Expr>, Box<Expr>),
@@ -934,6 +935,32 @@ impl Parser {
                 self.eat(&Tok::RBracket)?;
                 Ok(Expr::Array(elems))
             }
+            Tok::LBrace => {
+                // object literal: { key: value, ..., shorthand }
+                self.bump();
+                let mut fields = Vec::new();
+                while self.peek() != &Tok::RBrace && self.peek() != &Tok::Eof {
+                    let key = match self.peek().clone() {
+                        Tok::Id(k) => { self.bump(); k }
+                        Tok::Str(k) => { self.bump(); k }
+                        Tok::Num(n) => { self.bump(); emit_num(n) }
+                        other => return Err(format!("Expected object key, got {:?}", other)),
+                    };
+                    if self.peek() == &Tok::Colon {
+                        self.bump();
+                        let val = self.assignment()?;
+                        fields.push((key, val));
+                    } else {
+                        // shorthand { x } -> { x: x }
+                        fields.push((key.clone(), Expr::Ident(key)));
+                    }
+                    if self.peek() == &Tok::Comma {
+                        self.bump();
+                    }
+                }
+                self.eat(&Tok::RBrace)?;
+                Ok(Expr::Object(fields))
+            }
             other => Err(format!("Unexpected token in expression: {:?}", other)),
         }
     }
@@ -1111,6 +1138,13 @@ fn emit_expr(e: &Expr) -> Result<String, String> {
         Expr::Array(elems) => {
             let parts: Result<Vec<_>, _> = elems.iter().map(emit_expr).collect();
             format!("[{}]", parts?.join(", "))
+        }
+        Expr::Object(fields) => {
+            let mut parts = Vec::new();
+            for (k, v) in fields {
+                parts.push(format!("{}: {}", k, emit_expr(v)?));
+            }
+            format!("{{{}}}", parts.join(", "))
         }
         Expr::Unary(op, e) => {
             // fred uses `!`/`-` prefix; keep parens for safety

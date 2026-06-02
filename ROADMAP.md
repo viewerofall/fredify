@@ -2,29 +2,34 @@
 
 Captured so the next session starts cold without re-deriving anything.
 
-## #1 big rock: real floats
+## ✅ DONE: real floats
 
-Right now **all numbers are `int64_t`**. `Number(f64)` literals exist but every
-`Math.*` returns `int64_t`, so `let y = 412.35` truncates and `Math.sqrt(2)`
-returns `1`. This is the deepest correctness wart.
+Numbers used to be `int64_t`-only. Now there's a `Float` token/AST node and a
+`double` type threaded through inference + codegen: float literals, arithmetic
+promotion (any float operand → float result), `Math.sqrt`/`pow`/`fabs` return
+`double`, `%g` printing, and `${}`/`..` interpolation via `to_string_f`. Works in
+`.fred`, `.js`, and `.lua`. (Division still follows C: `int/int == int` — see
+TODO.md for the JS/Lua always-float question.)
 
-Needs a second numeric type threaded through:
-- lexer already keeps `f64`; add a `Float` vs `Int` distinction in the AST/types
-- type inference: a value is float if it has a fractional literal, comes from a
-  float-returning fn, or mixes with a float
-- codegen: emit `double` storage + `%g` printing; fix `Math.sqrt/pow/floor/...`
-  to return `double` where appropriate
-- mixed int/float arithmetic promotion rules
+## ✅ DONE (half): objects / dicts via boxed Values
 
-High effort (touches inference + codegen everywhere), high payoff.
+A tagged `Value` union + string-keyed `Dict` runtime. Scalars stay native/fast;
+only object fields are boxed and dispatch on the tag at runtime. Supports `{k:v}`
+literals, `o.field` read/write, `o["key"]`, nested objects, dict-returning
+functions, and runtime arithmetic/compare/print on fields. JS `{}` and Lua
+`{k=v}` frontends emit these.
 
 ## The text/data chain (do in order — each unlocks the next)
 
-1. **String arrays** — arrays are int-only today. This is the single unlock for
-   real text work: `string.split` returning words, lists of names, file lines.
-2. **Dicts / key-value** — the other half. Pairs with string arrays.
-3. **JSON parser** (C lib helper) — turns the HTTP layer from "fetch text" into
-   "consume APIs". **Blocked** on 1 + 2; don't start it first.
+1. **String / heterogeneous arrays** — arrays are still int-only. Make the Array
+   element type the boxed `Value` (touches every array helper + map/filter/reduce
+   closures). Unlocks `string.split` word lists, arrays-of-objects, mixed arrays.
+2. ✅ **Dicts / key-value** — done (see above). Arrays-in-dicts still blocked on #1.
+3. **JSON parser** (C lib helper) — half-unblocked; still wants string-arrays (#1).
+
+## Also now on the critical path
+- **Function parameter type inference** — params are `int64_t`, so strings/floats/
+  objects can't be passed to user functions yet. Highest-value next step. See TODO.md.
 
 ## Tier 1 ergonomics (each a few hours, self-contained, no type-system risk)
 

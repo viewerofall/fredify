@@ -345,6 +345,7 @@ enum Expr {
     Nil,
     Name(String),
     Table(Vec<Expr>),
+    Object(Vec<(String, Expr)>),
     Unary(String, Box<Expr>),
     Bin(String, Box<Expr>, Box<Expr>),
     Concat(Vec<Expr>),
@@ -838,16 +839,47 @@ impl Parser {
 
     fn table(&mut self) -> Result<Expr, String> {
         self.eat(&Tok::LBrace)?;
+
+        // Decide array vs dict by looking at the first entry: `name =` or `[k] =`
+        // means a key/value table (dict); otherwise it's an array.
+        let is_dict = matches!(self.peek(), Tok::LBracket)
+            || (matches!(self.peek(), Tok::Name(_)) && self.peek2() == &Tok::Eq);
+
+        if is_dict {
+            let mut fields = Vec::new();
+            while self.peek() != &Tok::RBrace {
+                let key = match self.peek().clone() {
+                    Tok::Name(k) => { self.bump(); k }
+                    Tok::LBracket => {
+                        self.bump();
+                        let k = match self.peek().clone() {
+                            Tok::Str(s) => { self.bump(); s }
+                            Tok::Num(n) => { self.bump(); emit_num(n) }
+                            other => return Err(format!("table key must be a string/number literal, got {:?}", other)),
+                        };
+                        self.eat(&Tok::RBracket)?;
+                        k
+                    }
+                    other => return Err(format!("mixed array/dict tables are unsupported; got {:?}", other)),
+                };
+                self.eat(&Tok::Eq)?;
+                let val = self.expr()?;
+                fields.push((key, val));
+                if self.peek() == &Tok::Comma || self.peek() == &Tok::Semi {
+                    self.bump();
+                }
+            }
+            self.eat(&Tok::RBrace)?;
+            return Ok(Expr::Object(fields));
+        }
+
         let mut elems = Vec::new();
         while self.peek() != &Tok::RBrace {
-            // reject key/value tables (dicts)
-            if self.peek() == &Tok::LBracket {
-                return Err("key/value tables (dicts) are unsupported; use an array".into());
-            }
-            if let Tok::Name(_) = self.peek() {
-                if self.peek2() == &Tok::Eq {
-                    return Err("key/value tables (dicts) are unsupported; use an array".into());
-                }
+            // a key/value entry appearing after array entries = mixed table (unsupported)
+            if self.peek() == &Tok::LBracket
+                || (matches!(self.peek(), Tok::Name(_)) && self.peek2() == &Tok::Eq)
+            {
+                return Err("mixed array/dict tables are unsupported".into());
             }
             elems.push(self.expr()?);
             if self.peek() == &Tok::Comma || self.peek() == &Tok::Semi {
@@ -1041,6 +1073,13 @@ fn emit_expr(e: &Expr) -> Result<String, String> {
         Expr::Table(elems) => {
             let parts: Result<Vec<_>, _> = elems.iter().map(emit_expr).collect();
             format!("[{}]", parts?.join(", "))
+        }
+        Expr::Object(fields) => {
+            let mut parts = Vec::new();
+            for (k, v) in fields {
+                parts.push(format!("{}: {}", k, emit_expr(v)?));
+            }
+            format!("{{{}}}", parts.join(", "))
         }
         Expr::Unary(op, e) => match op.as_str() {
             "#" => format!("{}.len()", emit_expr(e)?),

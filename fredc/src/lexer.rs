@@ -23,6 +23,7 @@ pub enum Token {
     // Identifiers and literals
     Id(String),
     Number(f64),
+    Float(f64),
     String(String),
     TemplateString(Vec<TemplateNode>),
 
@@ -153,17 +154,23 @@ impl Lexer {
         }
     }
 
-    fn read_number(&mut self) -> f64 {
+    // Returns (value, is_float). is_float is true if the literal contained a '.'
+    // so the parser can distinguish `3` (int) from `3.0`/`3.14` (double).
+    fn read_number(&mut self) -> (f64, bool) {
         let mut num_str = String::new();
+        let mut has_dot = false;
         while let Some(c) = self.peek() {
             if c.is_numeric() || c == '.' {
+                if c == '.' {
+                    has_dot = true;
+                }
                 num_str.push(c);
                 self.advance();
             } else {
                 break;
             }
         }
-        num_str.parse().unwrap_or(0.0)
+        (num_str.parse().unwrap_or(0.0), has_dot)
     }
 
     fn read_ident(&mut self) -> String {
@@ -268,8 +275,8 @@ impl Lexer {
                 })
             }
             Some(c) if c.is_numeric() => {
-                let num = self.read_number();
-                Ok(Token::Number(num))
+                let (num, is_float) = self.read_number();
+                Ok(if is_float { Token::Float(num) } else { Token::Number(num) })
             }
             Some('"') => self.read_string('"').map(Token::String),
             Some('\'') => self.read_string('\'').map(Token::String),

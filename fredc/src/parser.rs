@@ -79,7 +79,12 @@ impl Parser {
                             index: *index,
                             value,
                         }),
-                        _ => Err("Can only assign to identifiers or array elements".to_string()),
+                        Expr::Field { obj, field } => Ok(Stmt::AssignField {
+                            obj: *obj,
+                            field,
+                            value,
+                        }),
+                        _ => Err("Can only assign to identifiers, array elements, or object fields".to_string()),
                     }
                 } else {
                     Ok(Stmt::Expr(expr))
@@ -510,6 +515,10 @@ impl Parser {
                 self.advance();
                 Ok(Expr::Number(n))
             }
+            Token::Float(n) => {
+                self.advance();
+                Ok(Expr::Float(n))
+            }
             Token::String(s) => {
                 self.advance();
                 Ok(Expr::String(s))
@@ -633,7 +642,7 @@ impl Parser {
         let mut elements = Vec::new();
         while self.peek() != &Token::RBrace {
             // Skip numeric keys like "0:", "1:", etc.
-            if let Token::Number(_) = self.peek() {
+            if matches!(self.peek(), Token::Number(_) | Token::Float(_)) {
                 self.advance();
                 if self.peek() == &Token::Colon {
                     self.advance();
@@ -664,6 +673,11 @@ impl Parser {
                 }
                 Token::Number(n) => {
                     let n = *n as i64;
+                    self.advance();
+                    n.to_string()
+                }
+                Token::Float(n) => {
+                    let n = *n;
                     self.advance();
                     n.to_string()
                 }

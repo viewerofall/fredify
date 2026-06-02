@@ -1,0 +1,41 @@
+// 20 — Floats and objects (boxed containers), the two new big features.
+//
+//   fred examples/20_floats_and_objects.fred out && ./out
+//
+// fred now has real doubles (not just truncated ints) and string-keyed objects
+// whose fields can hold ints, floats, strings, bools, or nested objects.
+
+// --- floats ---
+let pi = 3.14159
+let r = 2.0
+print("circle area:", pi * r * r)
+print("sqrt(2):", Math.sqrt(2.0))
+print("10.0 / 3.0:", 10.0 / 3.0)
+print(`pi rounded down is ${Math.floor(pi)}`)
+
+// --- objects ---
+let player = {name: "abyss", hp: 100, speed: 2.75, alive: true}
+print("name:", player.name)
+print("speed:", player.speed)
+
+// fields are mutable
+player.hp = player.hp - 25
+print("hp after a hit:", player.hp)
+
+// arithmetic and comparisons on fields
+if (player.hp > 50) {
+  print(`${player.name} is still standing with ${player.hp} hp`)
+}
+
+// nested objects
+let game = {title: "veil", screen: {w: 1920, h: 1080}}
+print("resolution:", game.screen.w, "x", game.screen.h)
+game.screen.w = 2560
+print("new width:", game.screen.w)
+
+// objects from functions (params are int64_t today, so pass numbers)
+fn make_point(x, y) {
+  return {x: x, y: y}
+}
+let origin = make_point(0, 0)
+print(`origin at ${origin.x},${origin.y}`)

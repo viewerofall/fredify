@@ -18,6 +18,11 @@ pub enum Stmt {
         index: Expr,
         value: Expr,
     },
+    AssignField {
+        obj: Expr,
+        field: String,
+        value: Expr,
+    },
     If {
         cond: Expr,
         then_body: Vec<Stmt>,
@@ -51,6 +56,7 @@ pub enum Stmt {
 #[derive(Debug, Clone)]
 pub enum Expr {
     Number(f64),
+    Float(f64),
     String(String),
     Bool(bool),
     Nil,

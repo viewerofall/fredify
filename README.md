@@ -23,8 +23,10 @@ transpiler that emits `.fred`, which then goes through the normal pipeline.
 ### Type System
 - Static typing with inference
 - `int64_t` (integers)
+- `double` (floats — literals, arithmetic promotion, `%g` printing, `Math.sqrt`/`pow`)
 - `String` (immutable strings with concatenation)
-- `Array` (dynamic arrays with bounds checking)
+- `Array` (dynamic int arrays with bounds checking)
+- `Dict` / objects (`{key: value}`, string-keyed, values boxed as a tagged `Value`)
 - `FileHandle` (for I/O operations)
 
 ### Array Operations
@@ -252,8 +254,12 @@ The JS frontend handles a practical modern subset:
   `.reduce`/`.push`/`.pop`/etc. which line up 1:1
 - Compiler builtins like `input_key()` are callable directly
 
-**Not supported** (errors): objects/dicts `{}`, classes, regex, `continue`,
-destructuring, spread, async/generators. Arrays remain int-only (fred limit).
+- Object literals `{ key: value }` (incl. shorthand `{ x }`), member access/
+  assignment `o.field` / `o.field = v`, `o["key"]` — compile to fred dicts
+
+**Not supported** (errors): classes, regex, `continue`, destructuring, spread,
+async/generators. Arrays remain int-only (fred limit); function params are
+int64_t (can't pass strings/floats/objects to user functions yet).
 
 ## Lua support
 
@@ -270,9 +276,11 @@ The Lua frontend (`fredc/src/lua.rs`) parses **real Lua**, not fred syntax:
   `to_int_str`, `math.*` → `Math.*`, `table.*`/`os.*` pass through,
   `s:upper()`/`string.upper(s)` → `.uppercase()`, `s:sub()` → `.substring()`
 - Array-style table constructors `{1, 2, 3}` → fred arrays
+- Key/value tables `{name = "x", hp = 100}` and `{["k"] = v}` → fred dicts;
+  field access/assignment `t.field` / `t.field = v` and `t["key"]`
 
-**Not supported** (errors): key/value tables (dicts), metatables, multiple
-assignment/return (`a, b = 1, 2`), varargs `...`, coroutines, `goto`,
+**Not supported** (errors): metatables, mixed array+dict tables `{1, x=2}`,
+multiple assignment/return (`a, b = 1, 2`), varargs `...`, coroutines, `goto`,
 modules/`require`. Arrays are int-only.
 
 ⚠️ **Indexing is passed through verbatim** — Lua is 1-based, fred/C is 0-based.
@@ -291,13 +299,15 @@ The compiler validates:
 ## Limitations
 
 **Core constraints:**
-- No dynamic typing (static types inferred at compile time)
-- Arrays are homogeneous (only int64_t elements)
+- Static types inferred at compile time; object fields are dynamically tagged
+  (boxed `Value`), but scalar variables aren't
+- Arrays are homogeneous (only int64_t elements) — string/mixed arrays are TODO
+- Function parameters are int64_t (can't pass strings/floats/objects yet)
 - No closures as first-class values (can't store/return them)
 - No mutual recursion (functions not forward-declared)
 
 **Intentional design choices:**
-- No metatables or general key-value dicts
+- No metatables (but string-keyed dicts/objects are supported)
 - No coroutines or async features
 - No module system or imports (single-file only)
 - No regex or advanced string operations

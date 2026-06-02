@@ -62,6 +62,10 @@ impl Validator {
                 self.validate_expr(index);
                 self.validate_expr(value);
             }
+            Stmt::AssignField { obj, value, .. } => {
+                self.validate_expr(obj);
+                self.validate_expr(value);
+            }
             Stmt::If { cond, then_body, else_body } => {
                 self.validate_expr(cond);
                 for s in then_body {
@@ -204,6 +208,11 @@ impl Validator {
                     if matches!(e, Expr::String(_)) {
                         self.errors.push("Arrays cannot contain strings (only numbers)".to_string());
                     }
+                }
+            }
+            Expr::Object(fields) => {
+                for (_, v) in fields {
+                    self.validate_expr(v);
                 }
             }
             Expr::Closure { params, body } => {
