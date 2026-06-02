@@ -5,10 +5,12 @@ FREDC_BINARY := fredc/target/release/fredc
 FRED_WRAPPER := $(INSTALL_PREFIX)/fred
 
 # Every example compiles (make test). A deterministic subset also gets run and
-# diffed against golden output (make test-run). Excluded: random, stdin, network.
+# diffed against golden output (make test-run). Excluded: random, stdin, network,
+# and environment-dependent output (07 prints len($HOME), differs per machine).
 ALL_EXAMPLES := $(wildcard examples/*.fred examples/*.js examples/*.lua)
 SKIP_RUN := \
 	examples/04_math_library.fred \
+	examples/07_advanced_features.fred \
 	examples/11_rock_paper_scissors.fred \
 	examples/12_number_guessing_game.fred \
 	examples/13_snake_game.fred \
